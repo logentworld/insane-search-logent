@@ -1,122 +1,66 @@
-English | [한국어](README.ko.md) | [中文](README.zh.md) | [日本語](README.ja.md) | [Español](README.es.md)
+# insane-search-logent
 
-<div align="center">
+[fivetaku/insane-search](https://github.com/fivetaku/insane-search)를 포크해 Logent의
+`web_fetch` 구조 경로와 `.lpg` 플러그인으로 묶은 저장소예요. 원본 이력과 원작자 고지를
+그대로 유지하고, Logent에 필요한 변경만 `logent` 브랜치에 얹어요.
 
-# insane-search
+- 원본: `fivetaku/insane-search` v0.17.4 (`ead12c51633fa1e00ca8a048203da2439feb950e`, MIT)
+- 원본 README 원문: [`README.upstream.md`](README.upstream.md)
+- Logent 변경 내역: [`NOTICE`](NOTICE), [`docs/insane-search.md`](docs/insane-search.md)
+- 플러그인 id: `dev.logent.insane-search` (기존 설치와 같은 id를 유지해요)
 
-**Impossible is nothing. If it's public, insane-search gets in.**
+## 무엇을 하나요
 
-A resilient public-page reader for Claude Code. No API keys, no proxy setup.
+공개 페이지가 WAF·403·자바스크립트 셸로 막혔을 때 Phase 0→3 경로를 차례로 시도해
+본문을 다시 읽어요. 로그인·유료 장벽은 우회하지 않고 `authentication required`로 끝내요.
+Logent 코어는 직접 HTTP가 실패하면 이 플러그인의 `PageRescueService`를 호출하고,
+그다음에만 Jina Reader로 넘어가요.
 
-<p>
-  <a href="https://docs.anthropic.com/en/docs/claude-code"><img src="https://img.shields.io/badge/platform-Claude_Code-D97757?logo=claude" alt="Claude Code"></a>
-  <img src="https://img.shields.io/badge/API_key-not_required-3FB950" alt="No API key">
-  <a href="https://github.com/fivetaku/gptaku_plugins"><img src="https://img.shields.io/badge/part_of-gptaku--plugins-6E56CF" alt="part of gptaku-plugins"></a>
-  <a href="https://github.com/fivetaku/insane-search/stargazers"><img src="https://img.shields.io/github/stars/fivetaku/insane-search?style=flat&color=F0B72F" alt="stars"></a>
-</p>
+## 구조
 
-<!-- Hero — cinematic key-art: a blocked site (403 / CAPTCHA / WAF) shatters as
-     insane-search breaks through and returns real public content with its source. -->
-<img src="assets/hero.png" width="860" alt="Cinematic split: on the left a blocked site shows 403 Forbidden, a CAPTCHA, and a WAF wall; it shatters down the middle as insane-search breaks through on the right, returning a real public post from @claudeai (Claude Code Plugins) with its source — no API key.">
-
-</div>
-
----
-
-## New in v0.16.3
-
-- **One fetch for content and trace:** `--json-content` returns metadata, trace, and wrapped untrusted text together, without fetching the same URL again for diagnostics. Existing `--json` output still omits the body.
-- **Lazy PDF parsers:** `pdfplumber` and `pypdf` load only when PDF extraction is needed, not during ordinary HTML startup. PDF extraction and fallback behavior are preserved.
-
-## ⚡ Install
-
-```bash
-/plugin marketplace add https://github.com/fivetaku/gptaku_plugins.git
-/plugin install insane-search@gptaku-plugins
-/reload-plugins
+```text
+skills/insane-search/   원본 엔진·스킬·참조 (upstream 경로 그대로)
+plugin/                 Logent Kotlin 플러그인과 자산 패키징
+tests/python/           Logent가 추가한 안전 회귀 테스트
+scripts/                검증·서명 .lpg·릴리스
 ```
 
-No commands to learn. Ask Claude Code normally — insane-search kicks in when a fetch gets blocked.
+엔진은 `skills/insane-search/engine` 한 곳만 원천으로 써요. 별도 복사본을 두지 않아
+upstream을 합칠 때 충돌이 줄어요. `plugin/build.gradle.kts`가 실행에 필요한 파일만
+`engine.zip`으로 묶고, `plugin/src/main/assets/`는 빌드 산출물이라 저장소에 넣지 않아요.
 
-## 💬 Try it
+## 검증과 빌드
 
-Just ask normally — insane-search kicks in when a fetch gets blocked:
+Android SDK 37, JDK 21, Python 3.11 이상이 필요해요. API artifact는
+`plugin-api.lock`에 고정하며 GitHub Packages 읽기 권한이 있는 `GITHUB_ACTOR`와
+`GITHUB_TOKEN`을 환경에서 받아요.
 
-> *"Find what people are saying about Claude Code on Reddit and summarize the top threads."*
-> *"Search X for posts about insane-search."*
-> *"Summarize this YouTube video."*
+```bash
+./scripts/test.sh --python-only
+./scripts/test.sh
+LOGENT_CONTENT_SIGNING_KEY_FILE="$HOME/.local/share/logent/content-signing.pem" \
+  ./scripts/build.sh
+# build/dist/logent-insane-search-v<VERSION>.lpg
+```
 
-**Expected:** Claude reaches each site's public route — Reddit's feed, X through free Brave/Yahoo discovery plus tweet-result validation, YouTube captions — with no login and no API key. If xAI credentials are already available, X keyword discovery is automatically augmented with native `x_search`; the free route remains active and can be forced with `INSANE_SEARCH_XAI=off`.
+서명 개인키는 저장소 밖에만 두고, APK에 고정된 ECDSA P-256 공개키와 맞는 패키지만
+설치돼요.
 
-## 🌐 Works on
+## upstream 업데이트
 
-**X · Reddit · YouTube · Hacker News · Naver · Coupang · LinkedIn · Medium · Substack · arXiv · GitHub · Stack Overflow · Bluesky · Mastodon** — plus any site with a public page, feed, or `/rss`. Full platform list & methods → [PLATFORMS.md](PLATFORMS.md).
+```bash
+git fetch upstream
+git switch logent
+git merge upstream/main
+./scripts/test.sh
+git push origin logent
+```
 
-## ⚙️ Why it gets through
+합친 뒤 원본 커밋을 `UPSTREAM_COMMIT`에 갱신하고, Logent 패치(`phase0.py`의 공용 주소
+검사)가 유지됐는지 확인해요. upstream의 Claude Code 설치 스크립트·마켓플레이스 파일은
+Logent `.lpg`에 넣지 않아요.
 
-- **It escalates, never pre-judges** — public API readers → syndication gateways → TLS impersonation → a real headless browser, trying each route until one works.
-- **It looks human** — builds a full browser identity (real TLS fingerprint, cookie warming, referer chain), not just a swapped User-Agent.
-- **It finds hidden APIs** — watches a real browser's network traffic and reuses the site's own internal JSON.
-- **Zero setup** — auto-installs what it needs (`curl_cffi`, `yt-dlp`, …) on first use. No API keys, no signup.
+## 라이선스
 
-## 🆚 Default Claude Code vs `+ insane-search`
-
-| When you hit… | Claude Code alone | `+ insane-search` |
-| :--- | :--- | :--- |
-| A `403` / WAF-blocked page | ✖ gives up | ✓ escalates until one route gets through |
-| Platform content (X, Reddit, HN) | ✖ often blocked or empty | ✓ public API readers + syndication |
-| An anti-bot / CAPTCHA challenge | ✖ stops | ✓ TLS impersonation, then a real headless browser |
-| A media page (YouTube, 1,800+ sites) | ✖ no transcript | ✓ `yt-dlp` metadata + captions |
-| Missing tools (`curl_cffi`, `yt-dlp`) | — | ✓ auto-installs on first use |
-| API keys / signup | — | ✓ none |
-| A **login wall or paywall** | ✖ | ✖ **stops here, and says so** (see Boundaries) |
-
-The differentiating row is the one thing the default fetcher can't do: **it keeps trying public routes until one works.**
-
-## ✨ What just happened
-
-| Without it | With insane-search |
-| :--- | :--- |
-| Ordinary fetch hits `403` and Claude says it can't read the page | The plugin picks a public-access route and returns usable text |
-| You manually try mirrors, archives, mobile URLs | Fallbacks escalate automatically, public-only |
-| A blocked page is a dead end | Metadata and structured data still yield titles, prices, summaries |
-
-## 🔁 How it works
-
-<img src="assets/pipeline.png" width="860" alt="Phase 0→3 escalation pipeline: a blocked URL flows through special public endpoints → lightweight probes → TLS impersonation → a real headless browser until one returns clean public content; a login or paywall exits as 'authentication required'. Every response is scanned for OGP / JSON-LD.">
-
-<details>
-<summary><strong>Phase 0→3 adaptive scheduler — details</strong></summary>
-
-Each phase runs only if the previous one fails or detects a blocking signal:
-
-- **Phase 0** — special public endpoints (platform APIs, feeds) it can't discover generically
-- **Phase 1** — lightweight probes: public API readers, syndication gateways, mobile / `.json` / `/rss` URL variants
-- **Phase 2** — TLS impersonation (curl_cffi: safari → chrome → firefox) with a full browser identity
-- **Phase 3** — a real headless browser for JS-rendered pages
-- **Exit** — a login or paywall is detected: it reports *"authentication required"* rather than pretending
-
-Every response is also scanned for OGP / JSON-LD, so even partial pages yield titles, summaries, and prices.
-</details>
-
-## 🔒 Boundaries
-
-insane-search is a **reader for public content**, not a way around authentication.
-
-- Reaches what's available through public pages, public APIs, feeds, archives, and a browser's public responses.
-- **Stops at logins and paywalls** — it reports `authentication required` instead of trying to defeat them.
-- Never logs in as you and never stores or transmits credentials.
-- All routes use no-auth public endpoints and standard, documented techniques.
-- **You are responsible** for lawful, authorized use — each site's Terms of Service, `robots.txt`, rate limits, and applicable law. This is a dual-use developer tool; see [DISCLAIMER.md](DISCLAIMER.md).
-
-## License
-
-MIT — see [DISCLAIMER.md](DISCLAIMER.md) for acceptable-use and user-responsibility terms.
-
----
-
-<div align="center">
-
-**Part of [gptaku-plugins](https://github.com/fivetaku/gptaku_plugins)** — Claude Code plugins that break through the walls everything else stops at.
-
-</div>
+원본 엔진·스킬은 MIT이며 루트 `LICENSE`와 `DISCLAIMER.md`를 그대로 보존해요.
+`plugin/`의 Logent Kotlin 통합 코드는 GPL-3.0(`plugin/LICENSE`)이에요.

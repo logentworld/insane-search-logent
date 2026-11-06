@@ -1,0 +1,17 @@
+# insane-search 출처와 Logent 변경
+
+- 원본: https://github.com/fivetaku/insane-search
+- 버전: v0.17.4
+- 커밋: ead12c51633fa1e00ca8a048203da2439feb950e
+- 라이선스: MIT (`LICENSE`), 원본 고지(`DISCLAIMER.md`)
+
+## Logent에서 바꾼 것
+
+- `engine/phase0.py`의 Reddit·YouTube 판정을 호스트 접미사 포함 검사에서 정확한 호스트/서브도메인 검사로 바꿨어요. `reddit.com.evil.com` 같은 위장 호스트가 Phase 0로 분류되지 않아요.
+- `_cffi_get`이 리다이렉트를 자동으로 따라가지 않고, 홉마다 `safety.classify_url`로 공용 주소인지 확인한 뒤 다음 요청을 보내요. 사설·루프백·메타데이터 주소로의 리다이렉트는 요청 전에 거부해요.
+- `insane-search/engine/`는 이 저장소가 단일 원천이고, `plugin` 모듈이 `engine.zip`으로 묶어 APK 자산 `assets/plugins/insane-search/engine.zip`에 넣어요.
+- `dev.logent.insane-search` 플러그인이 `ensureReady`에서 APK 경로와 `unzip`으로 자산을 `~/.logent/plugins/insane-search/engine`에 staging·검증·원자 교체하고, Python 의존성을 확인한 뒤 마지막에 `VERSION`을 기록해요.
+- 플러그인은 `PageRescueService`로 코어의 `web_fetch` 구조 요청을 받아 `verdict`·`untried_routes`·`needsBrowser`를 그대로 돌려줘요. Brave 키를 받을 비밀 API가 아직 없어서 무키 경로로 실행해요.
+- 원본의 `references/`·`tests/`·`engine/tests/`는 저장소에 보존하지만, APK의 실행 ZIP에는 엔진 실행에 필요한 파일만 넣어요.
+
+원본 라이선스와 저작권 고지는 `LICENSE`에 그대로 보존했어요.

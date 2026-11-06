@@ -32,22 +32,37 @@ import shutil
 import subprocess
 import sys
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
+
+from . import safety
 
 
 # --- low-level helpers -------------------------------------------------------
 def _cffi_get(url: str, *, impersonate: str = "safari", timeout: int = 15):
     from curl_cffi import requests as r  # lazy: engine works even if missing
-    return r.get(
-        url,
-        impersonate=impersonate,  # type: ignore[arg-type]
-        timeout=timeout,
-        headers={
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,ko;q=0.8",
-        },
-        allow_redirects=True,
-    )
+
+    current = url
+    for _ in range(6):
+        safe, reason = safety.classify_url(current, allow_private=safety.allow_private_default())
+        if not safe:
+            raise ValueError(f"unsafe redirect target: {reason}")
+        response = r.get(
+            current,
+            impersonate=impersonate,  # type: ignore[arg-type]
+            timeout=timeout,
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9,ko;q=0.8",
+            },
+            allow_redirects=False,
+        )
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return response
+        location = response.headers.get("location")
+        if not location:
+            return response
+        current = urljoin(current, location)
+    raise ValueError("too many redirects")
 
 
 def _host(url: str) -> str:
@@ -65,11 +80,11 @@ def _detect(url: str) -> Optional[str]:
     h = _host(url)
     if not h:
         return None
-    if "reddit.com" in h or h == "redd.it":
+    if h == "reddit.com" or h.endswith(".reddit.com") or h == "redd.it" or h.endswith(".redd.it"):
         return "reddit"
     if h in ("x.com", "twitter.com") or h.endswith(".x.com") or h.endswith(".twitter.com"):
         return "x"
-    if "youtube.com" in h or h == "youtu.be":
+    if h == "youtube.com" or h.endswith(".youtube.com") or h == "youtu.be" or h.endswith(".youtu.be"):
         return "youtube"
     if h in ("threads.com", "threads.net") or h.endswith((".threads.com", ".threads.net")):
         return "threads"
