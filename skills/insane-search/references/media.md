@@ -138,7 +138,7 @@ ffprobe -v error -show_entries stream=codec_type,codec_name /tmp/threads.mp4
 - **DASH-only 포스트**: 실측 샘플은 progressive였으나 일부 포스트는 `video_dashinit`/`audio_dashinit` 분리 가능성 — 다운로드 후 ffprobe로 오디오 스트림 존재 확인.
 - **캐러셀(다중 영상) 포스트**: 최근접 1블록 규칙이 부족할 수 있음 (미테스트).
 - **이미지/텍스트 포스트**: 라우트가 ok=False로 반환해 일반 체인이 본문을 처리한다.
-- **로그인 월**: 현재 익명 GET 통과. Meta가 막으면 engine이 격자→Playwright로 에스컬레이션.
+- **로그인 월**: 인증 필요로 중단해요. 일반 공개 페이지의 렌더링만 필요하면 `needs_browser`에 따라 모델이 공식 `browser_use`를 호출해요. 로그인이나 차단을 우회하지 않아요.
 
 ## 주의사항
 

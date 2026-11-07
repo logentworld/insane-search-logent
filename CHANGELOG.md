@@ -1,5 +1,12 @@
 # Changelog
 
+## Logent browser_use 전환 — 2026-11-07
+
+- HTTP Phase 0→3와 정상 추출을 유지하고 로컬 브라우저 실행기·템플릿을 제거했어요. 기본 실행과 `--no-playwright` 모두 HTTP-only예요.
+- 브라우저가 필요한 실패는 `needs_browser`·`untried_routes: ["browser_use"]`와 한글 중단 사유로 모델에 정식 `browser_use` 호출을 안내해요. 인증·CAPTCHA·보안 모듈·차단은 우회하지 않아요.
+- Android Python 3.14/ARM64의 native 의존성을 `curl_cffi>=0.17.0`·`cffi>=2.1.1`로 복구하고, CFFI 소스 빌드 전제를 준비해요. 배포 fast path 전에 import를 검증하며 비밀을 가린 제한된 설치 진단을 유지해요.
+- upstream 이력과 API artifact 4.0.0은 유지하고 Logent 엔진 배포 표식만 새 revision으로 바꿨어요. 이 변경에서 빌드·테스트·실기기 검증은 실행하지 않았어요.
+
 ## 0.17.4 — 2026-10-28
 - **Windows에서 브라우저 폴백 의존성 설치 실패 수정 (#13).** `npm`이 `npm.cmd`라 `subprocess.run(["npm", ...])`이 실행 파일을 못 찾고 조용히 실패하던 문제. `shutil.which("npm")`이 찾은 경로로 실행한다.
 - **Windows 콘솔 인코딩 때문에 받아 온 본문이 버려지던 문제 수정 (#11).** `python -m engine` 시작 시 stdout·stderr를 UTF-8로 재설정해, cp949 같은 코드 페이지에서 `UnicodeEncodeError`로 종료하지 않는다.

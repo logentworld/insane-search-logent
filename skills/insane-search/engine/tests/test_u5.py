@@ -151,12 +151,12 @@ check("winning_route_from_grid",
       _winning_route(r_ok) == {"transform": "mobile_subdomain", "impersonate": "chrome",
                                "referer": "none", "phase": "grid"},
       f"extracted: {_winning_route(r_ok)}")
-r_browser = FetchResult(ok=True, trace=[
-    Attempt(phase="fallback", executor="playwright_real_chrome", url=U, url_transform="original",
+r_phase0 = FetchResult(ok=True, trace=[
+    Attempt(phase="phase0", executor="public_api", url=U, url_transform="original",
             impersonate=None, referer="", verdict=Verdict.STRONG_OK.value),
 ])
-check("winning_route_skips_browser", _winning_route(r_browser) is None,
-      "browser-only win is not learnable (None)")
+check("winning_route_skips_phase0", _winning_route(r_phase0) is None,
+      "공개 API 성공은 curl 경로로 학습하지 않아요.")
 
 print(f"\n{_passed} passed, {_failed} failed")
 import sys

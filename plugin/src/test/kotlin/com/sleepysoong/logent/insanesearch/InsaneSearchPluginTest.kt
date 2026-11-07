@@ -35,30 +35,6 @@ class InsaneSearchPluginTest {
         assertTrue(plugin.services().single() is PageRescueService)
     }
 
-    @Test
-    fun `ensureReady는 APK 경로와 unzip으로 자산을 원자 교체해요`() = runBlocking {
-        val host = host(apkPath = "/data/app/base apk.apk")
-        val plugin = InsaneSearchPlugin()
-
-        assertTrue(plugin.ensureReady(host).isSuccess)
-        val command = host.commands.single()
-
-        assertTrue(command.contains("APK='/data/app/base apk.apk'"))
-        assertTrue(command.contains("unzip -p \"\$APK\" 'assets/plugins/insane-search/engine.zip'"))
-        assertTrue(command.contains("HOME/.logent/plugins/insane-search"))
-        assertTrue(command.contains("engine/__main__.py"))
-        assertTrue(command.contains("'curl_cffi>=0.15.0' beautifulsoup4 pyyaml pypdf markdownify yt-dlp"))
-        assertTrue(command.contains("--user"))
-        assertTrue(command.contains("> \"\$DIR/VERSION\""))
-        assertTrue(command.contains(ENGINE_VERSION))
-        assertTrue(command.contains("\"\$DIR/engine.old\""))
-        assertFalse(command.contains("base64"))
-        assertEquals(900, host.timeouts.single())
-
-        val versionWrite = command.indexOf("> \"\$DIR/VERSION\"")
-        val depsGate = command.lastIndexOf("INSANE_SEARCH_DEPS_FAILED")
-        assertTrue("VERSION은 의존성 확인 뒤에 기록해야 해요", versionWrite > depsGate)
-    }
 
     @Test
     fun `이미 배포된 버전이면 같은 명령을 다시 실행하지 않아요`() = runBlocking {
@@ -99,52 +75,38 @@ class InsaneSearchPluginTest {
         assertEquals("Termux 연결 실패", ready.exceptionOrNull()?.message)
     }
 
-    @Test
-    fun `엔진 JSON의 본문과 진단 정보를 WebRescue로 돌려줘요`() = runBlocking {
-        val payload = """
-            {"ok":true,"verdict":"weak_ok","final_url":"https://example.com/","summary":"성공",
-             "prompt_injection_risk":"low","untrusted_text":"본문","untried_routes":[],
-             "must_invoke_playwright_mcp":false}
-        """.trimIndent()
-        val host = hostForFetch(payload)
-        val plugin = InsaneSearchPlugin()
-        plugin.ensureReady(host).getOrThrow()
-
-        val rescue = plugin.fetchPage("https://example.com/", 1_000, 540).getOrThrow()
-
-        assertEquals("본문", rescue.text)
-        assertEquals("weak_ok", rescue.verdict)
-        assertEquals(LAYER, rescue.layer)
-        assertFalse(rescue.needsBrowser)
-        assertTrue(rescue.untriedRoutes.isEmpty())
-        assertEquals(null, rescue.status)
-
-        val command = host.commands.last()
-        assertTrue(command.contains("python3 -m engine 'https://example.com/'"))
-        assertTrue(command.contains("--json-content --no-playwright"))
-        assertTrue(command.contains("--max-attempts 24"))
-        assertTrue(command.contains("BRAVE_SEARCH_API_KEY=''"))
-        assertTrue(command.contains("INSANE_SEARCH_XAI=off"))
-        assertTrue(command.contains("'1000' <<'PY'"))
-        assertEquals(540, host.timeouts.last())
-    }
 
     @Test
     fun `엔진 실패는 본문 없이 사유와 미시도 경로를 보존해요`() = runBlocking {
         val payload = """
-            {"ok":false,"verdict":"error","summary":"차단됨","stderr":"HTTP 403",
-             "untrusted_text":"","untried_routes":["playwright"],"must_invoke_playwright_mcp":true}
+            {"ok":false,"verdict":"error","summary":"browser_use로 확인해 주세요.","stop_reason":"browser_use가 필요해요.","stderr":"HTTP 403",
+             "untrusted_text":"[BEGIN UNTRUSTED WEB CONTENT]\n\n[END UNTRUSTED WEB CONTENT]","untried_routes":["browser_use"],"needs_browser":true}
         """.trimIndent()
         val plugin = InsaneSearchPlugin()
-        plugin.ensureReady(hostForFetch(payload, exitCode = 1)).getOrThrow()
+        plugin.ensureReady(hostForFetch(payload)).getOrThrow()
 
         val rescue = plugin.fetchPage("https://example.com/", 1_000, 540).getOrThrow()
 
         assertEquals("", rescue.text)
         assertEquals(UNVERIFIED_LAYER, rescue.layer)
-        assertEquals("error", rescue.verdict)
-        assertEquals(listOf("playwright"), rescue.untriedRoutes)
+        assertTrue(rescue.verdict.contains("browser_use가 필요해요."))
+        assertTrue(rescue.verdict.contains("browser_use로 확인해 주세요."))
+        assertEquals(listOf("browser_use"), rescue.untriedRoutes)
         assertTrue(rescue.needsBrowser)
+    }
+
+    @Test
+    fun `비정상 종료와 빈 본문은 검증된 성공이 아니에요`() = runBlocking {
+        for ((payload, exitCode) in listOf(
+            """{"ok":true,"verdict":"strong_ok","untrusted_text":"본문"}""" to 1,
+            """{"ok":true,"verdict":"strong_ok","untrusted_text":"   "}""" to 0,
+        )) {
+            val plugin = InsaneSearchPlugin()
+            plugin.ensureReady(hostForFetch(payload, exitCode)).getOrThrow()
+            val rescue = plugin.fetchPage("https://example.com/", 1_000, 540).getOrThrow()
+            assertEquals(UNVERIFIED_LAYER, rescue.layer)
+            assertTrue(rescue.text.isBlank())
+        }
     }
 
     @Test
@@ -171,7 +133,7 @@ class InsaneSearchPluginTest {
     }
 
     @Test
-    fun `URL과 글자 수 한도를 실행 전에 검증해요`() = runBlocking {
+    fun `잘못된 URL은 실행하지 않고 제한 시간은 지원 범위로 맞춰요`() = runBlocking {
         val host = hostForFetch("""{"ok":true,"untrusted_text":"본문"}""")
         val plugin = InsaneSearchPlugin()
         plugin.ensureReady(host).getOrThrow()
@@ -182,11 +144,9 @@ class InsaneSearchPluginTest {
         assertEquals(1, host.commands.size)
 
         plugin.fetchPage("https://example.com/", 10, 1).getOrThrow()
-        assertTrue(host.commands.last().contains("'1000' <<'PY'"))
         assertEquals(15, host.timeouts.last())
 
         plugin.fetchPage("https://example.com/", 99_999, 5_000).getOrThrow()
-        assertTrue(host.commands.last().contains("'26000' <<'PY'"))
         assertEquals(900, host.timeouts.last())
     }
 

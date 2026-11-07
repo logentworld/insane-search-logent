@@ -161,6 +161,8 @@ jobs:
             gh release edit edge --prerelease --notes "커밋 ${COMMIT:0:7}의 .lpg예요. $note"
           fi
           while IFS= read -r old; do
+            # 태그에 직접 배포한 운영 서명 패키지는 CI 정리 대상에서 제외해요.
+            if [[ "$REF_TYPE" == "tag" && "$old" == "${assets[0]##*/}" ]]; then continue; fi
             case "$old" in
               *.lpg|SHA256SUMS.edge|SHA256SUMS-edge-*.txt)
                 gh release delete-asset "$release" "$old" -y ;;

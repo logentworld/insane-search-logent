@@ -54,24 +54,24 @@ Just ask normally — insane-search kicks in when a fetch gets blocked:
 
 ## ⚙️ Why it gets through
 
-- **It escalates, never pre-judges** — public API readers → syndication gateways → TLS impersonation → a real headless browser, trying each route until one works.
-- **It looks human** — builds a full browser identity (real TLS fingerprint, cookie warming, referer chain), not just a swapped User-Agent.
-- **It finds hidden APIs** — watches a real browser's network traffic and reuses the site's own internal JSON.
+- **HTTP 수집과 브라우저를 분리해요** — 공개 API·피드와 HTTP Phase 0~3 경로를 먼저 사용해요.
+- **로컬 브라우저는 실행하지 않아요** — 옵션 생략과 `enable_playwright=True`도 HTTP-only예요. `--no-playwright`는 호환 스위치예요.
+- **모델이 공식 도구를 호출해요** — `needs_browser=true`, `untried_routes=["browser_use"]`이면 모델이 `sleepysoong:browser_use`의 `browser_use`로 공개 페이지를 확인해요.
 - **Zero setup** — auto-installs what it needs (`curl_cffi`, `yt-dlp`, …) on first use. No API keys, no signup.
 
 ## 🆚 Default Claude Code vs `+ insane-search`
 
 | When you hit… | Claude Code alone | `+ insane-search` |
 | :--- | :--- | :--- |
-| A `403` / WAF-blocked page | ✖ gives up | ✓ escalates until one route gets through |
+| 공개 페이지의 HTTP 403 | 수집에 실패할 수 있어요. | HTTP 진단을 반환하고 필요하면 모델이 공식 `browser_use`를 호출해요. |
 | Platform content (X, Reddit, HN) | ✖ often blocked or empty | ✓ public API readers + syndication |
-| An anti-bot / CAPTCHA challenge | ✖ stops | ✓ TLS impersonation, then a real headless browser |
+| CAPTCHA·보안 확인·접근 차단 | 중단해요. | 우회하지 않고 수집 한계를 알려요. |
 | A media page (YouTube, 1,800+ sites) | ✖ no transcript | ✓ `yt-dlp` metadata + captions |
 | Missing tools (`curl_cffi`, `yt-dlp`) | — | ✓ auto-installs on first use |
 | API keys / signup | — | ✓ none |
 | A **login wall or paywall** | ✖ | ✖ **stops here, and says so** (see Boundaries) |
 
-The differentiating row is the one thing the default fetcher can't do: **it keeps trying public routes until one works.**
+HTTP 예외·빈 본문·오류 응답은 성공으로 바꾸지 않아요. 브라우저가 필요하면 모델이 공식 도구를 호출하며, 실제 결과만 근거로 사용해요.
 
 ## ✨ What just happened
 
@@ -83,7 +83,7 @@ The differentiating row is the one thing the default fetcher can't do: **it keep
 
 ## 🔁 How it works
 
-<img src="assets/pipeline.png" width="860" alt="Phase 0→3 escalation pipeline: a blocked URL flows through special public endpoints → lightweight probes → TLS impersonation → a real headless browser until one returns clean public content; a login or paywall exits as 'authentication required'. Every response is scanned for OGP / JSON-LD.">
+HTTP Phase 0~3 수집과 진단을 유지하고 외부 브라우저 호출은 모델에 인계해요. 엔진은 브라우저나 MCP 서버를 설치하지 않아요.
 
 <details>
 <summary><strong>Phase 0→3 adaptive scheduler — details</strong></summary>
@@ -93,7 +93,7 @@ Each phase runs only if the previous one fails or detects a blocking signal:
 - **Phase 0** — special public endpoints (platform APIs, feeds) it can't discover generically
 - **Phase 1** — lightweight probes: public API readers, syndication gateways, mobile / `.json` / `/rss` URL variants
 - **Phase 2** — TLS impersonation (curl_cffi: safari → chrome → firefox) with a full browser identity
-- **Phase 3** — a real headless browser for JS-rendered pages
+- **브라우저 인계** — HTTP 수집으로 본문을 얻지 못하고 `needs_browser=true`이면 모델이 공식 `browser_use`를 호출해요. HTTP 성공은 `needs_browser=false`예요.
 - **Exit** — a login or paywall is detected: it reports *"authentication required"* rather than pretending
 
 Every response is also scanned for OGP / JSON-LD, so even partial pages yield titles, summaries, and prices.
@@ -104,7 +104,7 @@ Every response is also scanned for OGP / JSON-LD, so even partial pages yield ti
 insane-search is a **reader for public content**, not a way around authentication.
 
 - Reaches what's available through public pages, public APIs, feeds, archives, and a browser's public responses.
-- **Stops at logins and paywalls** — it reports `authentication required` instead of trying to defeat them.
+- **인증·CAPTCHA·보안 확인·접근 차단에서 멈춰요** — 브라우저에서도 우회하지 않아요.
 - Never logs in as you and never stores or transmits credentials.
 - All routes use no-auth public endpoints and standard, documented techniques.
 - **You are responsible** for lawful, authorized use — each site's Terms of Service, `robots.txt`, rate limits, and applicable law. This is a dual-use developer tool; see [DISCLAIMER.md](DISCLAIMER.md).

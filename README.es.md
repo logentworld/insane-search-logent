@@ -54,24 +54,24 @@ Solo pídelo con normalidad: insane-search se activa cuando algo se bloquea:
 
 ## ⚙️ Por qué lo consigue
 
-- **Escala, nunca prejuzga** —lectores de API públicas → pasarelas de sindicación → suplantación TLS → un navegador headless real, probando cada ruta hasta que una funciona.
-- **Parece humano** —construye una identidad de navegador completa (huella TLS real, calentamiento de cookies, cadena de referer), no solo un User-Agent cambiado.
-- **Encuentra APIs ocultas** —observa el tráfico de red del navegador real y reutiliza el JSON interno del propio sitio.
+- **HTTP 수집과 브라우저를 분리해요** — 공개 API·피드와 HTTP Phase 0~3 경로를 먼저 사용해요.
+- **로컬 브라우저는 실행하지 않아요** — 옵션 생략과 `enable_playwright=True`도 HTTP-only예요. `--no-playwright`는 호환 스위치예요.
+- **모델이 공식 도구를 호출해요** — `needs_browser=true`, `untried_routes=["browser_use"]`이면 모델이 `sleepysoong:browser_use`의 `browser_use`로 공개 페이지를 확인해요.
 - **Cero configuración** —instala lo que necesita (`curl_cffi`, `yt-dlp`, …) en el primer uso. Sin claves de API, sin registro.
 
 ## 🆚 Claude Code por defecto vs `+ insane-search`
 
 | Cuando te topas con… | Claude Code solo | `+ insane-search` |
 | :--- | :--- | :--- |
-| Una página con `403` / bloqueada por WAF | ✖ se rinde | ✓ escala hasta que una ruta entra |
+| 공개 페이지의 HTTP 403 | 수집에 실패할 수 있어요. | HTTP 진단을 반환하고 필요하면 모델이 공식 `browser_use`를 호출해요. |
 | Contenido de plataformas (X, Reddit, HN) | ✖ a menudo bloqueado o vacío | ✓ lectores de API públicas + sindicación |
-| Un reto anti-bot / CAPTCHA | ✖ se detiene | ✓ suplantación TLS y, si hace falta, navegador headless real |
+| CAPTCHA·보안 확인·접근 차단 | 중단해요. | 우회하지 않고 수집 한계를 알려요. |
 | Una página multimedia (YouTube, 1.800+ sitios) | ✖ sin transcripción | ✓ metadatos `yt-dlp` + subtítulos |
 | Herramientas que faltan (`curl_cffi`, `yt-dlp`) | — | ✓ se instalan solas en el primer uso |
 | Claves de API / registro | — | ✓ ninguno |
 | Un **muro de login o de pago** | ✖ | ✖ **se detiene aquí, y lo dice** (ver Límites) |
 
-La fila que marca la diferencia es lo único que el fetch por defecto no puede hacer: **sigue probando rutas públicas hasta que una funciona.**
+HTTP 예외·빈 본문·오류 응답은 성공으로 바꾸지 않아요. 브라우저가 필요하면 모델이 공식 도구를 호출하며, 실제 결과만 근거로 사용해요.
 
 ## ✨ Qué acaba de pasar
 
@@ -83,7 +83,7 @@ La fila que marca la diferencia es lo único que el fetch por defecto no puede h
 
 ## 🔁 Cómo funciona
 
-<img src="assets/pipeline.png" width="860" alt="Pipeline de escalada Phase 0→3: una URL bloqueada pasa por endpoints públicos oficiales → sondas ligeras → suplantación TLS → un navegador headless real hasta que una devuelve contenido público limpio; ante un login o muro de pago sale con 'authentication required'. Cada respuesta se escanea en busca de OGP / JSON-LD.">
+HTTP Phase 0~3 수집과 진단을 유지하고 외부 브라우저 호출은 모델에 인계해요. 엔진은 브라우저나 MCP 서버를 설치하지 않아요.
 
 <details>
 <summary><strong>Planificador adaptativo Phase 0→3 — detalles</strong></summary>
@@ -93,7 +93,7 @@ Cada fase se ejecuta solo si la anterior falla o detecta una señal de bloqueo:
 - **Phase 0** — endpoints públicos oficiales (APIs de plataforma, feeds) que la cadena genérica no puede descubrir por sí sola
 - **Phase 1** — sondas ligeras: lectores de API públicas, pasarelas de sindicación, variantes de URL móvil / `.json` / `/rss`
 - **Phase 2** — suplantación TLS (curl_cffi: safari → chrome → firefox) con una identidad de navegador completa
-- **Phase 3** — un navegador headless real, que además saca a la luz las APIs JSON públicas que un sitio usa internamente
+- **브라우저 인계** — HTTP 수집으로 본문을 얻지 못하고 `needs_browser=true`이면 모델이 공식 `browser_use`를 호출해요. HTTP 성공은 `needs_browser=false`예요.
 - **Exit** — se detecta un login o muro de pago: informa *"authentication required"* en lugar de fingir
 
 Cada respuesta también se escanea en busca de OGP / JSON-LD, así que incluso las páginas parciales dan títulos, resúmenes y precios.
@@ -104,7 +104,7 @@ Cada respuesta también se escanea en busca de OGP / JSON-LD, así que incluso l
 insane-search es un **lector de contenido público**, no una forma de saltarse la autenticación.
 
 - Alcanza lo disponible a través de páginas públicas, APIs públicas, feeds, archivos y las respuestas públicas de un navegador.
-- **Se detiene en logins y muros de pago** —informa `authentication required` en vez de intentar vencerlos.
+- **인증·CAPTCHA·보안 확인·접근 차단에서 멈춰요** — 브라우저에서도 우회하지 않아요.
 - Nunca inicia sesión por ti y nunca almacena ni transmite credenciales.
 - Todas las rutas usan endpoints públicos sin autenticación y técnicas estándar y documentadas.
 

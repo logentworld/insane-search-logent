@@ -49,8 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-retry", action="store_true",
                    help="Disable transient-status (429/502/503/504) probe retry.")
     p.add_argument("--no-extract", action="store_true",
-                   help="Disable content-rescue extraction (PDF/JSON-LD/render-merge); "
-                        "always return the raw response text.")
+                   help="PDF와 JSON-LD 본문 추출을 끄고 원본 응답을 반환해요.")
     p.add_argument("--no-markdown", action="store_true",
                    help="Disable markdownification. By default a raw-HTML success is "
                         "converted to structure-preserving markdown (tables/code kept) "
@@ -59,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Strip boilerplate (nav/footer/ads) to the article body via "
                         "optional resiliparse. Off by default; wins over --markdown.")
     p.add_argument("--no-playwright", action="store_true",
-                   help="Skip Playwright fallback (curl-only).")
+                   help="HTTP-only 호환 옵션이에요. 생략해도 로컬 브라우저는 실행하지 않아요.")
     p.add_argument("--no-phase0", action="store_true",
                    help="Skip the Phase 0 official-API router (generic grid only).")
     p.add_argument("--json", action="store_true",
@@ -88,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
             enable_maincontent=args.maincontent,
         )
     except Exception as e:
-        print(f"engine fatal: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"수집 엔진 오류가 발생했어요: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
     if args.trace:
@@ -106,35 +105,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(f"=== summary: {result.summary} ===", file=sys.stderr)
 
-    # Surface R7 hint (API-first route) prominently when summary contains it,
-    # regardless of --trace flag — this is actionable guidance, not noise.
-    if "R7 API-first" in (result.summary or ""):
-        print(
-            "\n════════════════════════════════════════════════════════════════\n"
-            "⚠️  R7 triggered — consider API-first route instead of HTML grid.\n"
-            "   See summary below; use --trace on the initial fetch for the full attempt log.\n"
-            "════════════════════════════════════════════════════════════════",
-            file=sys.stderr,
-        )
-        # Also print the full summary (which includes the hint) so caller sees it.
+    if not result.ok and result.needs_browser:
         print(result.summary, file=sys.stderr)
-
-    # Failure gate (R6): giving up is NOT permission to stop. Surface the routes
-    # the engine could not run by itself so the caller keeps escalating instead
-    # of reporting "blocked" prematurely (the exact bug this hardening fixes).
-    if not result.ok and (result.untried_routes or result.must_invoke_playwright_mcp):
-        print(
-            "\n════════════════════════════════════════════════════════════════\n"
-            "⛔ NOT EXHAUSTED — do not declare failure yet (R6).\n"
-            f"   grid_exhausted={result.grid_exhausted}  stop_reason={result.stop_reason}\n"
-            "   Routes the engine cannot run itself — try these before giving up:",
-            file=sys.stderr,
-        )
-        for r in result.untried_routes:
-            print(f"     • {r}", file=sys.stderr)
-        if result.must_invoke_playwright_mcp:
-            print("   ➜ must_invoke_playwright_mcp = TRUE — drive MCP Playwright from the agent session.", file=sys.stderr)
-        print("════════════════════════════════════════════════════════════════", file=sys.stderr)
 
     if args.json or args.json_content:
         payload = result.to_dict()

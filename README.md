@@ -8,13 +8,17 @@
 - 원본 README 원문: [`README.upstream.md`](README.upstream.md)
 - Logent 변경 내역: [`NOTICE`](NOTICE), [`docs/insane-search.md`](docs/insane-search.md)
 - 플러그인 id: `com.sleepysoong.logent.insane-search`
+- 플러그인 키: `sleepysoong:insane_search` (`logent-plugin.json` 단일 정의)
+- 필수 참조: `sleepysoong:browser_use` · Logent 0.0.84 이상 · API artifact 4.0.0
 
 ## 무엇을 하나요
 
-공개 페이지가 WAF·403·자바스크립트 셸로 막혔을 때 Phase 0→3 경로를 차례로 시도해
-본문을 다시 읽어요. 로그인·유료 장벽은 우회하지 않고 `authentication required`로 끝내요.
-Logent 코어는 직접 HTTP가 실패하면 이 플러그인의 `PageRescueService`를 호출하고,
-그다음에만 Jina Reader로 넘어가요.
+공개 페이지가 HTTP·403·자바스크립트 셸로 읽히지 않으면 Phase 0→3의 HTTP 경로로
+본문을 다시 읽어요. 로그인·CAPTCHA·보안 모듈·차단을 우회하지 않아요.
+HTTP 수집이 끝나도 브라우저 확인이 필요하면 `needs_browser: true`와
+`untried_routes: ["browser_use"]`를 돌려줘요. 모델이 정식 `browser_use`를 호출하며,
+이 플러그인은 로컬 Playwright·Puppeteer·nodriver·patchright를 설치하거나 실행하지 않아요.
+`--no-playwright`는 HTTP-only 호환 옵션이고 생략해도 동작이 같아요.
 
 ## 구조
 
@@ -29,9 +33,16 @@ scripts/                검증·서명 .lpg·릴리스
 upstream을 합칠 때 충돌이 줄어요. `plugin/build.gradle.kts`가 실행에 필요한 파일만
 `engine.zip`으로 묶고, `plugin/src/main/assets/`는 빌드 산출물이라 저장소에 넣지 않아요.
 
+공개 의존성은 `sleepysoong:browser_use`이며 manifest의 가용성 판단에만 사용해요.
+다른 플러그인의 준비 기능이나 데스크톱을 자동으로 시작하지 않아요.
+`ensureReady`는 Termux Python을 유지하면서 필요한 라이브러리만 설치해요.
+Android Python 3.14/ARM64에서는 `curl_cffi>=0.17.0`과 `cffi>=2.1.1`을 사용하고,
+CFFI 소스 빌드를 위해 Termux `pkg`의 `clang`, `pkg-config`, `libffi`가 필요해요.
+배포 표식이 같아도 import를 먼저 확인하며, 예전 ABI나 누락된 의존성을 재설치해요.
+
 ## 검증과 빌드
 
-Android SDK 37, JDK 21, Python 3.11 이상이 필요해요. API artifact는
+Android SDK 37, JDK 21, Python 3.11 이상이 필요해요. API artifact 4.0.0은
 `plugin-api.lock`에 고정하며 GitHub Packages 읽기 권한이 있는 `GITHUB_ACTOR`와
 `GITHUB_TOKEN`을 환경에서 받아요.
 

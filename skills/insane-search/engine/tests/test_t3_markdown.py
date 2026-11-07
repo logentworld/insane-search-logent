@@ -6,7 +6,7 @@ Deterministic, network-free. Locks in:
   * extraction_source gains "+md" only on the raw-HTML path
   * script/style/head noise is stripped before conversion (no junk in markdown)
   * markdownify absent -> content stays raw HTML, source == "raw" (graceful)
-  * json_ld / inner_text (already plain text) are NOT markdownified
+  * JSON-LD 본문은 이미 일반 텍스트라 마크다운으로 다시 변환하지 않아요.
   * FetchResult still constructs and exposes extraction_source
 
 Run:  python3 engine/tests/test_t3_markdown.py

@@ -1,0 +1,9 @@
+{
+  "id": "com.sleepysoong.logent.insane-search",
+  "key": "sleepysoong:insane_search",
+  "name": "Insane Search",
+  "entry": "com.sleepysoong.logent.insanesearch.InsaneSearchPlugin",
+  "dependencies": ["sleepysoong:browser_use"],
+  "apiMin": 4,
+  "apiMax": 4
+}

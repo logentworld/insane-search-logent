@@ -39,7 +39,7 @@ from typing import Any, Optional
 
 from .content_safety import ContentSafetyReport, analyze_untrusted_content, wrap_untrusted_content
 from .validators import Verdict, validate, TERMINAL_NONSUCCESS
-from .waf_detector import detect, load_profile, _load_profiles, last_load_error
+from .waf_detector import detect, _load_profiles, load_profile, last_load_error
 from .url_transforms import iter_transformed
 
 
@@ -47,10 +47,7 @@ _OK_VALUES = (Verdict.STRONG_OK.value, Verdict.WEAK_OK.value)
 # Role (a) — "stop the TLS diversity grid; more curl attempts cannot help".
 # 429 IS included here on purpose: hammering the grid only deepens rate-limiting.
 _TERMINAL_NONSUCCESS_VALUES = frozenset(v.value for v in TERMINAL_NONSUCCESS)
-# Role (b) — "the browser fallback is ALSO futile; this is a real wall".
-# 429 is deliberately EXCLUDED: it is transient, and both the R6 gate below and
-# SKILL.md recommend a browser / MCP retry after backoff. Only a true wall
-# (auth prompt, 404) means the rendered browser cannot help either.
+# 인증과 없는 문서는 브라우저로도 해결하지 않아요.
 _BROWSER_FUTILE_VALUES = frozenset({
     Verdict.AUTH_REQUIRED.value, Verdict.NOT_FOUND.value,
 })
@@ -73,8 +70,8 @@ REFERER_STRATEGIES = {
 # --- Attempt & result schema -------------------------------------------------
 @dataclass
 class Attempt:
-    phase: str                       # probe | grid | fallback
-    executor: str                    # curl_cffi | playwright_real_chrome | ...
+    phase: str                       # HTTP 수집 단계를 기록해요.
+    executor: str                    # HTTP 실행기를 기록해요.
     url: str
     url_transform: str               # original | mobile_subdomain | ...
     impersonate: Optional[str]       # safari | chrome | ... | None (non-curl)
@@ -103,21 +100,14 @@ class FetchResult:
     planned_attempts: int = 0
     executed_attempts: int = 0
     grid_exhausted: bool = False
-    stop_reason: str = ""            # success | exhausted | budget | <terminal verdict> | error
-    # Failure gate (R6): when ok=False these tell the caller it is NOT finished —
-    # which escalation routes the engine could not perform itself remain to try.
+    stop_reason: str = ""
     untried_routes: list[str] = field(default_factory=list)
-    must_invoke_playwright_mcp: bool = False
+    needs_browser: bool = False
     content_trust: str = ""
     prompt_injection_risk: str = ""
     prompt_injection_signals: list[str] = field(default_factory=list)
     untrusted_content_boundary: dict[str, str] = field(default_factory=dict)
-    # Content-rescue metadata: `content` stays the raw fetched text unless a
-    # rescue path fired — PDF bodies become pypdf-extracted text, SPA shells
-    # whose visible text is thinner than their JSON-LD articleBody get the
-    # articleBody, and a Playwright render can contribute its innerText
-    # (render-merge). `extraction_source` says which path produced `content`
-    # (raw | pdf | json_ld | raw_disabled | *+inner_text | ...).
+    # HTTP 본문의 PDF, JSON-LD 및 문서 추출 출처를 기록해요.
     extraction_quality: float = 0.0
     extraction_source: str = ""
     extraction_meta: dict = field(default_factory=dict)
@@ -166,7 +156,7 @@ class FetchResult:
             "grid_exhausted": self.grid_exhausted,
             "stop_reason": self.stop_reason,
             "untried_routes": self.untried_routes,
-            "must_invoke_playwright_mcp": self.must_invoke_playwright_mcp,
+            "needs_browser": self.needs_browser,
             "content_trust": self.content_trust,
             "prompt_injection_risk": self.prompt_injection_risk,
             "prompt_injection_signals": self.prompt_injection_signals,
@@ -186,7 +176,6 @@ class FetchResult:
 # from beating a full article:
 #   * PDF bodies (magic bytes / content-type, re-guarded) → pypdf text
 #   * SPA shells whose visible text is thinner than their JSON-LD articleBody
-#   * Playwright render-merge: rendered innerText wins over a thinner body
 # pypdf is an optional import; every path degrades to the raw text.
 import io as _io
 import json as _json
@@ -239,7 +228,6 @@ def _load_pdf_extractors() -> None:
     _pdf_extractors_loaded = True
 
 _JSONLD_MIN_CHARS = 100          # an articleBody shorter than this is a teaser
-_INNER_TEXT_MIN_CHARS = 200      # innerText shorter than this never wins
 
 # Parser-input ceilings. Every byte reaching a rescue parser is attacker
 # controlled, so each parser gets a hard input bound and a bounded output —
@@ -250,7 +238,6 @@ _JSONLD_MAX_BLOCKS = 10          # ld+json blocks parsed per page
 _JSONLD_MAX_BLOB = 200_000       # chars of a single ld+json blob given to json.loads
 _RESCUE_MAX_TEXT = 1_000_000     # chars any rescue path may return as content
 _PDF_MAX_BYTES = 25 * 1024 * 1024  # PDF bodies above this are never parsed
-_INNER_TEXT_MAX = 1_000_000      # chars of Playwright innerText accepted
 
 
 def _quality_score(md: str) -> float:
@@ -455,28 +442,10 @@ def _html_to_markdown(html: str) -> str:
     return md
 
 
-class _PWResp:
-    """Minimal response shim so a Playwright fallback's HTML can run through
-    the same rescue-extraction path as a curl response."""
-    def __init__(self, text: str, url: str, headers: Optional[dict] = None):
-        self.text = text
-        self.content = text.encode("utf-8", "ignore") if text else b""
-        self.url = url
-        self.status_code = 200
-        self.headers = headers or {"content-type": "text/html"}
-
-
-def _extract_response(resp, final_url: str, inner_text: str = "",
+def _extract_response(resp, final_url: str,
                       enable_markdown: bool = True,
                       enable_maincontent: bool = False) -> tuple[str, str, float, dict]:
-    """Returns (title, content, quality, meta); meta = {source, error,
-    inner_text_used}. The raw body wins by default — see the module-block
-    comment for when a rescue path may replace it.
-
-    ``enable_markdown`` (default True) converts a raw-HTML success to structured
-    markdown; ``enable_maincontent`` (opt-in, default False) instead strips
-    boilerplate to the article body via resiliparse. When both are on,
-    maincontent wins. Each is a no-op when its library is absent (raw kept)."""
+    """HTTP 응답에서 제목, 본문, 품질과 추출 메타데이터를 반환해요."""
     if _looks_like_pdf(resp, final_url):
         body = getattr(resp, "content", None)
         if isinstance(body, (bytes, bytearray)) and body:
@@ -491,19 +460,17 @@ def _extract_response(resp, final_url: str, inner_text: str = "",
             if bytes(body[:5]) == b"%PDF-" or ctype_pdf:
                 title, text, quality, err = _extract_pdf(bytes(body), final_url)
                 if text:
-                    return title, text, quality, {"source": "pdf", "error": err or "",
-                                                  "inner_text_used": False}
+                    return title, text, quality, {"source": "pdf", "error": err or ""}
                 return title, f"[PDF binary, {len(body)} bytes; extractor={err or 'ok'}]", \
-                       0.0, {"source": "pdf", "error": err, "inner_text_used": False}
+                       0.0, {"source": "pdf", "error": err}
 
     text = getattr(resp, "text", "") or ""
     if not text:
         body = getattr(resp, "content", None)
         if isinstance(body, (bytes, bytearray)) and body:
             return "", f"[{len(body)} bytes; binary]", 0.0, \
-                   {"source": "raw_binary", "error": "no_text_body", "inner_text_used": False}
-        return "", "", 0.0, {"source": "empty", "error": "empty_body",
-                             "inner_text_used": False}
+                   {"source": "raw_binary", "error": "no_text_body"}
+        return "", "", 0.0, {"source": "empty", "error": "empty_body"}
 
     # Rescue parsers only ever scan a bounded prefix of the body; `content`
     # itself keeps the full raw text (that surface predates this chain).
@@ -521,48 +488,30 @@ def _extract_response(resp, final_url: str, inner_text: str = "",
     if len(jsonld) > _JSONLD_MIN_CHARS and len(jsonld) > len(visible):
         content, source, quality = jsonld, "json_ld", _quality_score(jsonld)
 
-    # Render-merge: compare innerText against the VISIBLE text length (not the
-    # raw markup length — markup would always win the comparison and disable
-    # the merge).
-    inner = (inner_text or "").strip()[:_INNER_TEXT_MAX]
-    chosen_len = len(visible) if source == "raw" else len(content)
-    inner_used = False
-    if inner and len(inner) > max(chosen_len, _INNER_TEXT_MIN_CHARS):
-        content, quality = inner, _quality_score(inner)
-        source = source + "+inner_text"
-        inner_used = True
-
-    # M2 maincontent (opt-in): resiliparse strips boilerplate to the article
-    # body. Runs only on the raw-HTML path (json_ld / inner_text are already
-    # clean plain text). Takes precedence over markdown when both are enabled.
+    # 원본 HTML일 때만 본문 추출을 적용해요.
     if enable_maincontent and source == "raw":
         main = _main_content_text(content)
         if main:
             return title, main, _quality_score(main), {
-                "source": "maincontent", "error": "", "inner_text_used": inner_used}
+                "source": "maincontent", "error": ""}
 
-    # M1 markdownify (opt-in): only the raw-HTML path carries markup. json_ld /
-    # inner_text are already plain text, so leave them alone. When enabled and
-    # markdownify is present and produces usable output, replace the raw HTML
-    # with structured markdown (tables/code preserved); otherwise keep the raw
-    # HTML unchanged (contract preserved for callers that don't opt in).
+    # 원본 HTML일 때만 마크다운으로 변환해요.
     if enable_markdown and source == "raw":
         md = _html_to_markdown(content)
         if md:
             content, quality = md, _quality_score(md)
             source = "raw+md"
-    return title, content, quality, {"source": source, "error": "",
-                                     "inner_text_used": inner_used}
+    return title, content, quality, {"source": source, "error": ""}
 
 
 def _maybe_extract(resp, final_url: str, *, enable_extraction: bool,
-                   inner_text: str = "", enable_markdown: bool = True,
+                   enable_markdown: bool = True,
                    enable_maincontent: bool = False) -> tuple[str, str, float, dict]:
     """Run rescue extraction when enabled; otherwise raw text + consistent meta."""
     if not enable_extraction:
         return "", getattr(resp, "text", "") or "", 0.0, \
-               {"source": "raw_disabled", "error": "", "inner_text_used": False}
-    return _extract_response(resp, final_url, inner_text=inner_text,
+               {"source": "raw_disabled", "error": ""}
+    return _extract_response(resp, final_url,
                              enable_markdown=enable_markdown, enable_maincontent=enable_maincontent)
 
 
@@ -621,6 +570,12 @@ def _run_attempt(
     att.body_size = vr.body_size
     att.verdict = vr.verdict.value
     att.reasons = vr.reasons
+    if att.verdict in _OK_VALUES and (
+        not 200 <= att.status < 300
+        or not ((getattr(resp, "content", b"") or b"").strip() or (getattr(resp, "text", "") or "").strip())
+    ):
+        att.verdict = Verdict.UNKNOWN.value
+        att.reasons = ["HTTP 성공 상태와 비어 있지 않은 본문이 필요해요."]
     return att, resp
 
 
@@ -796,10 +751,9 @@ def fetch(
     so learning can never break a fetch. Disable per-call with
     ``enable_learning=False`` or globally with ``INSANE_LEARN=0``.
 
-    ``enable_extraction`` (default True) turns on content-rescue extraction:
-    PDF bodies come back as pypdf-extracted text, and thin SPA shells fall back
-    to JSON-LD articleBody / rendered innerText. Ordinary HTML successes keep
-    the raw body — check ``FetchResult.extraction_source`` ("raw" = untouched).
+    ``enable_playwright``와 ``max_browser_attempts``는 호환 인자로만 받아요.
+    값과 관계없이 HTTP만 실행하며 외부 브라우저는 모델이 호출해요.
+    PDF와 JSON-LD 본문 추출은 ``enable_extraction``으로 제어해요.
 
     ``enable_retry`` (default True) retries transient statuses (429/502/503/
     504) on the PROBE attempt with exponential backoff, honouring a numeric
@@ -845,7 +799,7 @@ def fetch(
             elif learned_existed:
                 learning.record_failure(
                     url, device_class,
-                    penalize=learning.is_real_failure(result.stop_reason))
+                    penalize=learning.is_real_failure(result.verdict))
     except Exception:
         pass
 
@@ -933,15 +887,18 @@ def _fetch_core(
                     verdict=(Verdict.STRONG_OK.value if a["ok"] else Verdict.BLOCKED.value),
                     reasons=[a["note"]] if a.get("note") else [],
                 ))
-            if p0["ok"]:
+            if p0["ok"] and p0.get("content", "").strip() and any(
+                a.get("ok") and 200 <= a.get("status", 0) < 300
+                for a in p0["attempts"]
+            ):
                 trunc = {k: p0[k] for k in ("truncated_possible", "truncation_reason") if k in p0}
                 return FetchResult(
                     ok=True, content=p0["content"], final_url=p0["final_url"],
                     verdict=Verdict.STRONG_OK.value,
                     profile_used=f"phase0:{p0['platform']}", trace=trace,
-                    summary=f"Phase 0 official route: {p0['platform']}:{p0['route']}"
-                            + (f" (truncated_possible: {trunc.get('truncation_reason')})" if trunc else ""),
-                    stop_reason="success",
+                    summary=f"Phase 0 공식 경로 {p0['platform']}:{p0['route']}에서 수집했어요."
+                            + (f" 일부 내용이 생략될 수 있어요: {trunc.get('truncation_reason')}." if trunc else ""),
+                    stop_reason="HTTP 수집에 성공했어요.",
                     extraction_meta=trunc,
                 )
             # Recognised platform but every official route failed → fall through
@@ -1040,74 +997,7 @@ def _fetch_core(
         grid_exhausted = True
         stop_reason = "exhausted"
 
-    # Only a true wall (404/auth) makes the browser futile. A 429 stops the TLS
-    # grid (role a) but must NOT skip the browser fallback (role b): 429 is
-    # transient and the R6 gate / SKILL.md route it to a browser / MCP retry.
-    skip_browser = stop_reason in _BROWSER_FUTILE_VALUES
-
-    # -------- Phase 3: Playwright fallback ----------------------------------
-    if enable_playwright and not skip_browser:
-        browser_used = 0
-        try:
-            from .executor import run_playwright_fallback
-            fb_profile = load_profile(profile_used or "unknown_challenge", profiles=profiles)
-            fb_order = fb_profile.get("fallback_when_challenge") or ["playwright_real_chrome"]
-            for fb_name in fb_order:
-                if fb_name == "curl_grid_exhaust":
-                    continue
-                # A "playwright_mcp" entry can only be driven from the agent
-                # session — the executor returns a zero-work UNKNOWN stub (it
-                # cannot launch MCP from Python). Record that stub in the trace
-                # so the route stays visible, but do NOT let it consume a real
-                # browser budget slot: otherwise, e.g. cloudflare_turnstile's
-                # [playwright_mcp, protocol_stealth_chrome, playwright_real_chrome]
-                # would burn both max_browser_attempts=2 slots before the real
-                # Chrome executor is ever reached.
-                is_mcp_stub = fb_name.startswith("playwright_mcp")
-                if not is_mcp_stub and browser_used >= max_browser_attempts:
-                    break
-                pw_attempt, pw_content = run_playwright_fallback(
-                    url, profile_id=profile_used or "unknown_challenge",
-                    success_selectors=success_selectors, device_class=device_class,
-                    force_executor=fb_name, timeout=timeout if timeout and timeout > 30 else 90,
-                )
-                trace.append(pw_attempt)
-                if not is_mcp_stub:
-                    browser_used += 1
-                if pw_attempt.verdict in _OK_VALUES:
-                    # Render-merge: the executor stashes the rendered innerText
-                    # on the attempt; the rescue gate keeps whichever of
-                    # (visible body text, innerText) carries more text.
-                    pw_inner = getattr(pw_attempt, "_inner_text", "") or ""
-                    _t, pw_out, pw_q, pw_meta = _maybe_extract(
-                        _PWResp(pw_content, pw_attempt.url), pw_attempt.url,
-                        enable_extraction=enable_extraction, inner_text=pw_inner,
-                        enable_markdown=enable_markdown, enable_maincontent=enable_maincontent)
-                    return FetchResult(
-                        ok=True, content=pw_out, final_url=pw_attempt.url,
-                        verdict=pw_attempt.verdict, profile_used=profile_used,
-                        trace=trace,
-                        summary=f"Playwright fallback succeeded via {fb_name} "
-                                f"(content={pw_meta.get('source')}, q={pw_q})",
-                        planned_attempts=planned, executed_attempts=curl_attempts,
-                        grid_exhausted=grid_exhausted, stop_reason="success",
-                        extraction_quality=pw_q,
-                        extraction_source=pw_meta.get("source", ""),
-                        extraction_meta=pw_meta,
-                    )
-                if pw_attempt.verdict == Verdict.SUSPECT_OK.value and best_suspect is None:
-                    best_suspect = (None, pw_attempt)
-        except ImportError:
-            trace.append(Attempt(
-                phase="fallback", executor="playwright", url=url,
-                url_transform="original", impersonate=None, referer="",
-                verdict=Verdict.UNKNOWN.value, error="executor module not available"))
-        except Exception as e:
-            trace.append(Attempt(
-                phase="fallback", executor="playwright", url=url,
-                url_transform="original", impersonate=None, referer="",
-                verdict=Verdict.UNKNOWN.value, error=f"{type(e).__name__}:{str(e)[:200]}"))
-
+    # Phase 3에서는 로컬 실행 없이 모델의 외부 browser_use 호출로 넘겨요.
     # -------- Give up, return best we have ----------------------------------
     return _give_up(trace, profile_used, last_resp, last_attempt, best_suspect,
                     planned=planned, executed=curl_attempts,
@@ -1115,43 +1005,13 @@ def _fetch_core(
 
 
 def _untried_routes(stop_reason, grid_exhausted) -> tuple[list[str], bool]:
-    """Failure gate (R6): name the escalation routes the engine itself could not
-    perform, so the caller never mistakes give-up for "everything was tried".
-
-    Returns (untried_routes, must_invoke_playwright_mcp).
-    """
-    routes: list[str] = []
-    # 429 is TRANSIENT, not a wall — exclude it from terminal so the gate still
-    # surfaces backoff/MCP instead of telling the agent to give up (the exact
-    # premature-failure this hardening exists to prevent).
-    rate_limited = stop_reason == Verdict.RATE_LIMITED.value
-    # Terminal non-success (404 / auth / paywall) → a real wall; nothing else helps.
-    terminal = stop_reason in _TERMINAL_NONSUCCESS_VALUES and not rate_limited
-    if terminal:
-        return routes, False
-
-    if rate_limited:
-        routes.append("rate-limited (429) — transient: back off a few seconds then retry; a different TLS family or Playwright MCP often clears it. Do NOT hammer the grid.")
-    # Budget cut → the curl grid itself was not finished (skip for 429: don't hammer).
-    elif stop_reason == "budget" or not grid_exhausted:
-        routes.append("generic-grid: NOT exhausted — re-run fetch() with max_attempts=None")
-
-    # A gated page that survived the curl grid → the real browser is the next
-    # escalation, and Playwright MCP must be driven from the AGENT session
-    # (the engine can only spawn local Node Chrome, which Cloudflare-class
-    # challenges often detect). So MCP is, by construction, an untried route here.
-    must_mcp = True
-    routes.append(
-        "playwright_mcp (run from the agent session): browser_navigate → "
-        "browser_network_requests → catch /api,/graphql,*.json internal endpoint → "
-        "re-fetch that API URL with `python3 -m engine`; or browser_snapshot for rendered HTML"
-    )
-    routes.append("user_hint retry: fetch(url, user_hint={'impersonate_first': 'safari_ios'|'chrome', 'referer_strategy': 'none'}) and/or device_class='mobile'")
-    return routes, must_mcp
+    """인증이나 없는 문서가 아니면 모델의 외부 브라우저 호출을 안내해요."""
+    if stop_reason in _BROWSER_FUTILE_VALUES:
+        return [], False
+    return ["browser_use"], True
 
 
-_REAL_EXECUTORS = frozenset({
-    "curl_cffi", "playwright_real_chrome", "playwright_mobile_chrome"})
+_REAL_EXECUTORS = frozenset({"curl_cffi"})
 _INFRA_AUTH_VERDICTS = frozenset({Verdict.AUTH_REQUIRED.value, Verdict.NOT_FOUND.value})
 _WAF_VERDICTS = frozenset({
     Verdict.CHALLENGE.value, Verdict.BLOCKED.value,
@@ -1187,9 +1047,14 @@ def _classify_block(trace) -> str:
 def _give_up(trace, profile_used, last_resp, last_attempt, best_suspect,
              *, planned, executed, grid_exhausted, stop_reason) -> FetchResult:
     """Return the most honest failure result, preferring suspect content."""
-    untried, must_mcp = _untried_routes(stop_reason, grid_exhausted)
+    untried, needs_browser = _untried_routes(stop_reason, grid_exhausted)
+    stop_reason = (
+        "인증이 필요해서 수집을 중단했어요." if stop_reason == Verdict.AUTH_REQUIRED.value else
+        "문서를 찾을 수 없어서 수집을 중단했어요." if stop_reason == Verdict.NOT_FOUND.value else
+        "HTTP 수집을 마치고 browser_use 호출이 필요해요."
+    )
     block_class = _classify_block(trace)
-    if best_suspect is not None:
+    if best_suspect is not None and needs_browser:
         s_resp, s_att = best_suspect
         content = getattr(s_resp, "text", "") if s_resp is not None else ""
         return FetchResult(
@@ -1199,7 +1064,7 @@ def _give_up(trace, profile_used, last_resp, last_attempt, best_suspect,
             summary=_format_summary(trace, profile_used, stop_reason),
             planned_attempts=planned, executed_attempts=executed,
             grid_exhausted=grid_exhausted, stop_reason=stop_reason,
-            untried_routes=untried, must_invoke_playwright_mcp=must_mcp,
+            untried_routes=untried, needs_browser=needs_browser,
             block_class=block_class,
         )
     return FetchResult(
@@ -1211,7 +1076,7 @@ def _give_up(trace, profile_used, last_resp, last_attempt, best_suspect,
         summary=_format_summary(trace, profile_used, stop_reason),
         planned_attempts=planned, executed_attempts=executed,
         grid_exhausted=grid_exhausted, stop_reason=stop_reason,
-        untried_routes=untried, must_invoke_playwright_mcp=must_mcp,
+        untried_routes=untried, needs_browser=needs_browser,
         block_class=block_class,
     )
 
@@ -1221,12 +1086,7 @@ def url_of(attempt: Optional[Attempt]) -> str:
 
 
 def fetch_many(urls: list[str], **kwargs) -> list[FetchResult]:
-    """Fetch many URLs, reusing the per-host SessionPool across calls.
-
-    The first URL of a host may pay for warmup / browser bootstrap; later URLs
-    of the SAME host reuse the winning session's cookies + connection, which is
-    where R7-style bulk collection gets its throughput. Ordering by host keeps
-    the warm session hot."""
+    """호스트별 HTTP 세션을 재사용해서 여러 URL을 수집해요."""
     by_host: dict[str, list[int]] = {}
     for i, u in enumerate(urls):
         from .transport import _host_of
@@ -1253,41 +1113,20 @@ def _build_result(resp, attempt: Attempt, trace: list[Attempt], profile_used: Op
         verdict=attempt.verdict,
         profile_used=profile_used,
         trace=trace,
-        summary=f"{attempt.executor} {attempt.impersonate} + {attempt.url_transform} + "
-                f"referer:{attempt.referer} → {attempt.verdict} "
-                f"(content={meta.get('source')}, q={quality})",
+        summary=f"HTTP 경로 {attempt.executor}에서 수집에 성공했어요.",
         planned_attempts=planned, executed_attempts=executed,
-        grid_exhausted=grid_exhausted, stop_reason=stop_reason,
+        grid_exhausted=grid_exhausted, stop_reason="HTTP 수집에 성공했어요.",
         extraction_quality=quality,
         extraction_source=meta.get("source", ""),
         extraction_meta=meta,
     )
 
 
-# WAF profiles known to typically gate HTML but leave internal JSON APIs
-# (relatively) open. R7 hint surfaces an API-first route.
-_R7_ELIGIBLE_PROFILES = frozenset({
-    "akamai_bot_manager", "cloudflare_turnstile", "datadome_probable",
-    "perimeterx_human", "f5_big_ip", "aws_waf",
-})
-
-R7_HINT = (
-    "💡 R7 API-first 권장: WAF가 HTML 경로를 차단 중. "
-    "Playwright MCP 사용 → browser_navigate → browser_network_requests "
-    "→ `/api/`·`/graphql`·`\\.json` 필터로 내부 엔드포인트 탐지 → "
-    "해당 URL을 `python3 -m engine <API_URL>`로 재호출. 대부분 API 레이어는 "
-    "WAF 방어가 얕아 curl_cffi만으로 수집됨."
-)
-
-
 def _format_summary(trace: list[Attempt], profile: Optional[str], stop_reason: str = "") -> str:
-    n = len(trace)
-    verdicts = [a.verdict for a in trace]
-    challenge_count = sum(1 for v in verdicts if v == Verdict.CHALLENGE.value)
-    base = (
-        f"failed after {n} attempts; profile={profile}; stop={stop_reason}; "
-        f"verdicts={','.join(v for v in verdicts[:5])}" + ("..." if n > 5 else "")
+    return (
+        f"HTTP 요청 {len(trace)}회 후 수집하지 못했어요. {stop_reason} "
+        "필요한 경우 모델이 sleepysoong:browser_use를 호출해 공개 내용을 확인해요. "
+        "인증, CAPTCHA, 보안 검사와 접근 차단을 우회하지 않아요."
+        if stop_reason == "HTTP 수집을 마치고 browser_use 호출이 필요해요."
+        else f"HTTP 요청 {len(trace)}회 후 수집하지 못했어요. {stop_reason}"
     )
-    if profile in _R7_ELIGIBLE_PROFILES and challenge_count >= 3:
-        return base + "\n" + R7_HINT
-    return base

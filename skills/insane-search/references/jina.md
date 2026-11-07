@@ -54,11 +54,9 @@ curl -s "https://r.jina.ai/https://example.com/file.pdf"
 
 PDF → 마크다운 자동 변환. 페이지 수 메타데이터 포함.
 
-### 쿠키 전달 (인증 사이트)
+### 인증 쿠키를 전달하지 않아요
 
-```bash
-curl -H "X-Set-Cookie: session=abc123" "https://r.jina.ai/{URL}"
-```
+인증·세션 쿠키를 Jina나 HTTP 엔진으로 전달하지 않아요. 로그인·페이월·CAPTCHA·보안 확인·접근 차단이 나타나면 우회하지 않고 한계를 알려요.
 
 ### 링크 보존
 
@@ -113,7 +111,7 @@ curl -H "X-Respond-With: html" "https://r.jina.ai/{URL}"
 |--------|------|
 | X/Twitter | 402 — Syndication/oEmbed 사용 (twitter.md 참조) |
 | Reddit | 차단 — JSON API 사용 (json-api.md 참조) |
-| JS 렌더 커뮤니티 | 빈 본문 반환 — engine/Playwright 폴백 |
+| JS 렌더 커뮤니티 | 빈 본문이면 HTTP 실패로 남기고, 모델이 공식 `browser_use`로 공개 페이지를 확인해요. |
 | WAF/봇 차단 (CloudFront·Cloudflare 등) | 403 / HTTP 430 — engine 체인 사용 |
 | CAPTCHA/인증 요구 | 접근 경계 — 인증 필요로 중단 |
 

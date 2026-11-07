@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""M4 regression — differential block classification (route-outcome comparison).
-
-Deterministic, network-free. Locks in (Bamberg arXiv:2606.14525 §5.3 idea:
-compare outcomes ACROSS routes to tell a bypassable bot-wall from a hard wall):
-  * routes disagree (different statuses/verdicts) -> "bot_detection" (bypassable)
-  * uniform auth_required / not_found -> "infra_or_auth" (stealth won't help)
-  * uniform challenge/blocked across every route -> "bot_detection" (browser may help)
-  * insufficient signal -> "" (no over-claim)
-  * FetchResult exposes block_class via to_dict; success carries "".
-
-Run:  python3 engine/tests/test_t6_differential.py
-"""
+"""HTTP 경로별 진단 분류를 검증해요. 분류가 보안 경계 우회를 허용하지는 않아요."""
 from __future__ import annotations
 
 import os
@@ -34,13 +23,13 @@ def t_disagreeing_routes_bot_detection() -> None:
     trace = [_att(Verdict.CHALLENGE.value, 403), _att(Verdict.BLOCKED.value, 429),
              _att(Verdict.SUSPECT_OK.value, 200)]
     assert _classify_block(trace) == "bot_detection", _classify_block(trace)
-    print("  ✓ routes disagree -> bot_detection (bypassable)")
+    print("  ✓ 서로 다른 HTTP 결과를 bot_detection으로 분류해요.")
 
 
 def t_uniform_auth_infra() -> None:
     trace = [_att(Verdict.AUTH_REQUIRED.value, 401), _att(Verdict.AUTH_REQUIRED.value, 401)]
     assert _classify_block(trace) == "infra_or_auth", _classify_block(trace)
-    print("  ✓ uniform auth_required -> infra_or_auth (not stealth-bypassable)")
+    print("  ✓ 반복된 인증 필요 응답을 infra_or_auth로 분류해요.")
 
 
 def t_uniform_notfound_infra() -> None:
@@ -53,7 +42,7 @@ def t_uniform_challenge_bot_detection() -> None:
     trace = [_att(Verdict.CHALLENGE.value, 403), _att(Verdict.CHALLENGE.value, 403),
              _att(Verdict.CHALLENGE.value, 403)]
     assert _classify_block(trace) == "bot_detection", _classify_block(trace)
-    print("  ✓ uniform challenge -> bot_detection (browser escalation may help)")
+    print("  ✓ 반복된 보안 확인 응답을 bot_detection으로 진단해요.")
 
 
 def t_insufficient_signal_empty() -> None:

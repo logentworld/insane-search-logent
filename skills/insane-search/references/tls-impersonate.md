@@ -12,48 +12,15 @@ python3 -c "import curl_cffi" 2>/dev/null || pip install -U "curl_cffi>=0.15.0" 
 
 설치 후 사용 가능. **미설치를 이유로 이 스텝을 건너뛰지 않는다.**
 
-## 다중 타겟 순차 시도
+## HTTP 엔진을 단일 진입점으로 사용해요
 
-하나의 impersonate 타겟이 실패하면 다른 타겟으로 재시도한다.
-**시도 순서: safari → chrome → firefox**
+TLS 후보·referer·URL 변형과 응답 검증은 엔진에 맡겨요. HTTP 200이나 본문 길이만으로 성공을 판단하는 별도 클라이언트를 만들지 않아요.
 
-```python
-from curl_cffi import requests
-
-TARGETS = ["safari", "chrome", "firefox"]
-HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.google.com/",
-}
-
-def cffi_fetch(url, locale="ko-KR"):
-    """다중 타겟 순차 시도 + 신원위장. 성공하면 (response, target) 반환."""
-    from urllib.parse import urlparse
-    origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-    for target in TARGETS:
-        try:
-            session = requests.Session(impersonate=target)
-            session.headers.update(HEADERS)
-            session.headers["Accept-Language"] = f"{locale},{locale.split('-')[0]};q=0.9"
-            session.headers["Referer"] = "https://www.google.com/"
-            # 신원위장: 홈페이지 쿠키 워밍 → Referer 체인
-            try:
-                session.get(origin, timeout=10)
-            except Exception:
-                pass  # 홈 실패해도 본 요청은 시도
-            session.headers["Referer"] = origin
-            resp = session.get(url, timeout=20)
-            # JS 필수 사이트 감지 → 나머지 타겟 시도 무의미
-            if "behavioral-content" in resp.text or "sec-if-cpt" in resp.text:
-                return None, None  # → Phase 3 Playwright
-            if resp.status_code == 200 and len(resp.text) > 500:
-                return resp, target
-        except Exception:
-            continue
-    return None, None
+```bash
+python3 -m engine "https://example.com/article" --json-content
 ```
+
+`ok=false`이고 `needs_browser=true`이면 모델이 공식 `sleepysoong:browser_use`의 `browser_use`를 호출해요. 예외·빈 본문·HTTP 오류를 성공으로 승격하지 않아요. 로그인·CAPTCHA·보안 확인·접근 차단은 우회하지 않아요.
 
 ## 임퍼소네이션 타겟 목록 (v0.15.0)
 
@@ -109,25 +76,9 @@ session.get("https://example.com/")
 resp = session.get("https://example.com/search?q=...")
 ```
 
-## 콤보: nodriver/FlareSolverr → curl_cffi
+## 브라우저 쿠키를 전달하지 않아요
 
-JS 챌린지 사이트는 브라우저로 쿠키를 획득한 뒤 curl_cffi로 고속 처리:
-
-```python
-# 1. nodriver로 cf_clearance 쿠키 획득
-import nodriver as uc
-browser = await uc.start(headless=True)
-page = await browser.get("https://cf-protected-site.com")
-await page.cf_verify()
-cookies = await browser.cookies.get_all()
-
-# 2. curl_cffi Session에 쿠키 전달
-from curl_cffi import requests
-session = requests.Session(impersonate="chrome")
-for c in cookies:
-    session.cookies.set(c["name"], c["value"])
-resp = session.get("https://cf-protected-site.com/api/data")
-```
+HTTP 세션의 일반 쿠키 관리는 유지하지만, 브라우저에서 얻은 인증·챌린지 쿠키를 엔진에 주입하지 않아요. 로컬 브라우저나 챌린지 해결 서비스를 설치하지 않아요. 렌더링이 필요한 공개 페이지는 모델이 공식 `browser_use`로 확인해요.
 
 ## 비동기 (async)
 
@@ -180,9 +131,9 @@ resp = client.get("https://example.com")
 | TLS/JA3 핑거프린트 | 대응 가능 | 핵심 기능 |
 | HTTP/2 SETTINGS 핑거프린트 | 대응 가능 | impersonate에 포함 |
 | HTTP/3 QUIC 핑거프린트 | 대응 가능 (v0.15+) | 신규 |
-| JS 챌린지 (Turnstile 등) | **불가** | → nodriver 또는 Playwright |
-| CAPTCHA | **불가** | → 2captcha/CapSolver |
-| IP 평판 (데이터센터) | **불가** | → 프록시/VPN |
-| 행동 분석 (마우스/타이밍) | **불가** | → 실제 브라우저 |
+| JS 챌린지 (Turnstile 등) | 처리하지 않아요. | 보안 확인을 우회하지 않고 중단해요. |
+| CAPTCHA | 처리하지 않아요. | 풀이 서비스나 자동화를 사용하지 않아요. |
+| IP 접근 차단 | 처리하지 않아요. | 프록시·VPN으로 우회하지 않아요. |
+| 행동 기반 보안 확인 | 처리하지 않아요. | 우회 동작 없이 한계를 알려요. |
 
-JS 챌린지가 걸린 사이트는 → [playwright.md](playwright.md) 로 넘긴다.
+일반 공개 페이지의 렌더링이 필요하면 [browser_use 호출 안내](playwright.md)를 참고해요.

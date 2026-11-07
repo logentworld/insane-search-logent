@@ -15,7 +15,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /** 엔진 배포 위치와 실행 자산 이름. Termux 홈 기준 상대 경로예요. */
-internal const val ENGINE_VERSION = "ead12c51633fa1e00ca8a048203da2439feb950e"
+internal const val ENGINE_VERSION = "ead12c51633fa1e00ca8a048203da2439feb950e-logent-browser-use-2"
 internal const val ENGINE_DIR = "plugins/insane-search"
 internal const val ENGINE_ASSET_ENTRY = "assets/plugins/insane-search/engine.zip"
 internal const val DEPLOY_TIMEOUT_SECONDS = 900
@@ -112,34 +112,95 @@ internal class EngineRuntime(private val engineVersion: String = ENGINE_VERSION)
         val text = payload.string("untrusted_text").orEmpty()
         val verdict = payload.string("verdict").orEmpty()
             .ifBlank { payload.string("summary").orEmpty() }
+        val verified = exitCode == 0 && ok && text.isNotBlank()
+        val diagnostic = if (verified) verdict else listOf(
+            verdict, payload.string("stop_reason").orEmpty(), payload.string("summary").orEmpty(),
+        ).filter { it.isNotBlank() }.distinct().joinToString(" · ")
         return Result.success(
             WebRescue(
-                text = text,
-                layer = if (ok && text.isNotBlank()) LAYER else UNVERIFIED_LAYER,
+                text = if (verified) text else "",
+                layer = if (verified) LAYER else UNVERIFIED_LAYER,
                 status = null,
-                verdict = verdict,
+                verdict = diagnostic,
                 untriedRoutes = payload.array("untried_routes").orEmpty().mapNotNull { element ->
                     runCatching { element.jsonPrimitive.contentOrNull }.getOrNull()
                 },
-                needsBrowser = payload.boolean("must_invoke_playwright_mcp") == true,
+                needsBrowser = payload.boolean("needs_browser") == true,
             ),
         )
     }
 
     private fun failureReason(output: String): String =
-        output.lineSequence().firstOrNull { it.contains("INSANE_SEARCH_") }
-            ?: output.lineSequence().lastOrNull { it.isNotBlank() }
-            ?: "insane-search 배포에 실패했어요."
+        output.lineSequence().filter { it.isNotBlank() }.joinToString("\n").takeLast(4_000)
+            .ifBlank { "insane-search 배포에 실패했어요." }
 
     private fun deployCommand(apkPath: String, identity: String): String = """
         |export PATH=/data/data/com.termux/files/usr/bin:${'$'}PATH
         |DIR="${'$'}HOME/.logent/plugins/insane-search"
         |mkdir -p "${'$'}DIR" || { echo "INSANE_SEARCH_DIR_FAILED"; exit 1; }
+        |command -v python3 >/dev/null 2>&1 || { echo "INSANE_SEARCH_PYTHON_MISSING"; exit 78; }
+        |python3 - <<'PY'
+        |import importlib, importlib.metadata as metadata, os, re, shutil, subprocess, sys, tempfile
+        |android = sys.platform == "android" or hasattr(sys, "getandroidapilevel")
+        |def version(name):
+        |    return tuple(int(x) for x in re.findall(r"\d+", metadata.version(name))[:3])
+        |def check():
+        |    if version("curl_cffi") < (0, 17, 0) or (android and version("cffi") < (2, 1, 1)):
+        |        raise RuntimeError("라이브러리 버전을 갱신해야 해요.")
+        |    for module in ("cffi", "_cffi_backend", "curl_cffi", "curl_cffi.requests", "bs4", "yaml", "pypdf", "markdownify", "yt_dlp"):
+        |        importlib.import_module(module)
+        |def diagnose(text):
+        |    for key, value in os.environ.items():
+        |        if value and re.search(r"key|token|secret|password|credential", key, re.I):
+        |            text = text.replace(value, "[가렸어요]")
+        |    text = re.sub(r"https?://[^\s]+", "[주소를 가렸어요]", text)
+        |    text = re.sub(r"(?i)((?:token|password|api[_-]?key|authorization)\s*[:=]\s*)[^\r\n]*", r"\1[가렸어요]", text)
+        |    print(text[-3000:], file=sys.stderr)
+        |def pip_install(packages, extra=()):
+        |    with tempfile.TemporaryFile() as errors:
+        |        result = subprocess.run(
+        |            [sys.executable, "-m", "pip", "install", "--user", "--upgrade", "--disable-pip-version-check", *extra, *packages],
+        |            stdout=errors, stderr=subprocess.STDOUT,
+        |        )
+        |        if result.returncode:
+        |            errors.seek(0, os.SEEK_END)
+        |            errors.seek(max(0, errors.tell() - 12000))
+        |            diagnose(errors.read().decode("utf-8", "replace"))
+        |            raise RuntimeError("필요한 Python 라이브러리를 설치하지 못했어요.")
+        |try:
+        |    check()
+        |except Exception:
+        |    try:
+        |        extra = ["--force-reinstall"]
+        |        packages = ["curl_cffi>=0.17.0", "beautifulsoup4", "pyyaml", "pypdf", "markdownify", "yt-dlp"]
+        |        if android:
+        |            if not shutil.which("clang") or not shutil.which("pkg-config"):
+        |                raise RuntimeError("Termux pkg로 clang과 pkg-config, libffi를 준비해야 해요.")
+        |            ffi = subprocess.run(["pkg-config", "--cflags", "--libs", "libffi"], capture_output=True, text=True)
+        |            if ffi.returncode:
+        |                raise RuntimeError("Termux pkg의 libffi 개발 파일을 찾지 못했어요.")
+        |            os.environ.setdefault("CC", "clang")
+        |            prefix = os.environ.get("PREFIX", "/data/data/com.termux/files/usr")
+        |            os.environ["CPPFLAGS"] = os.environ.get("CPPFLAGS", "") + " -I" + prefix + "/include"
+        |            os.environ["LDFLAGS"] = os.environ.get("LDFLAGS", "") + " -L" + prefix + "/lib"
+        |            pip_install(["setuptools", "wheel", "pycparser"])
+        |            packages.insert(0, "cffi>=2.1.1")
+        |            extra.extend(["--no-build-isolation", "--no-binary=cffi"])
+        |        pip_install(packages, extra)
+        |        # 이전 ABI의 확장 모듈을 재사용하지 않고 새 프로세스에서 검증해요.
+        |        result = subprocess.run([sys.executable, "-c", "import cffi, _cffi_backend, curl_cffi, curl_cffi.requests, bs4, yaml, pypdf, markdownify, yt_dlp"], capture_output=True, text=True)
+        |        if result.returncode:
+        |            diagnose(result.stderr)
+        |            raise RuntimeError("설치한 Python 라이브러리를 불러오지 못했어요.")
+        |    except Exception as exc:
+        |        print("INSANE_SEARCH_DEPS_FAILED: " + str(exc), file=sys.stderr)
+        |        raise SystemExit(1)
+        |PY
+        |[ "${'$'}?" -eq 0 ] || exit 1
         |if [ "$(cat "${'$'}DIR/VERSION" 2>/dev/null)" = '$engineVersion' ] && [ "$(cat "${'$'}DIR/CONTENT" 2>/dev/null)" = '$identity' ] && [ -f "${'$'}DIR/engine/__main__.py" ]; then
         |  echo "$READY_MARKER"
         |  exit 0
         |fi
-        |command -v python3 >/dev/null 2>&1 || { echo "INSANE_SEARCH_PYTHON_MISSING"; exit 78; }
         |command -v unzip >/dev/null 2>&1 || { echo "INSANE_SEARCH_UNZIP_MISSING"; exit 78; }
         |APK=${shellQuote(apkPath)}
         |STAGE=${'$'}(mktemp -d "${'$'}DIR/stage.XXXXXXXX") || { echo "INSANE_SEARCH_STAGE_FAILED"; exit 1; }
@@ -164,22 +225,6 @@ internal class EngineRuntime(private val engineVersion: String = ENGINE_VERSION)
         |PY
         |[ "${'$'}?" -eq 0 ] || { echo "INSANE_SEARCH_EXTRACT_FAILED"; exit 1; }
         |[ -f "${'$'}STAGE/unpacked/engine/__main__.py" ] || { echo "INSANE_SEARCH_LAYOUT_FAILED"; exit 1; }
-        |check_deps() {
-        |  python3 - <<'PY'
-        |import importlib, importlib.metadata as metadata, re
-        |for module in ("curl_cffi", "bs4", "yaml", "pypdf", "markdownify", "yt_dlp"):
-        |    importlib.import_module(module)
-        |version = tuple(int(x) for x in re.findall(r"\d+", metadata.version("curl_cffi"))[:2])
-        |if version < (0, 15):
-        |    raise SystemExit(f"curl_cffi too old: ${'$'}{version}")
-        |PY
-        |}
-        |if ! check_deps >/dev/null 2>&1; then
-        |  if ! python3 -m pip install --user -q 'curl_cffi>=0.15.0' beautifulsoup4 pyyaml pypdf markdownify yt-dlp >/dev/null 2>&1; then
-        |    echo "INSANE_SEARCH_DEPS_FAILED"; exit 1
-        |  fi
-        |  check_deps >/dev/null 2>&1 || { echo "INSANE_SEARCH_DEPS_FAILED"; exit 1; }
-        |fi
         |printf '%s' '$identity' > "${'$'}STAGE/CONTENT" || exit 1
         |# 첫 교체 전에 이전 표식을 무효화하고 마지막에만 새 표식을 원자 교체해요.
         |rm -f "${'$'}DIR/CONTENT" || exit 1
@@ -212,20 +257,24 @@ internal class EngineRuntime(private val engineVersion: String = ENGINE_VERSION)
         |trap 'rm -f "${'$'}OUT" "${'$'}ERR"' EXIT
         |python3 -m engine ${shellQuote(url)} --json-content --no-playwright \
         |  --device auto --timeout 20 --max-attempts 24 >"${'$'}OUT" 2>"${'$'}ERR"
-        |python3 - "${'$'}OUT" "${'$'}ERR" '$limit' <<'PY'
+        |ENGINE_EXIT=${'$'}?
+        |python3 - "${'$'}OUT" "${'$'}ERR" '$limit' "${'$'}ENGINE_EXIT" <<'PY'
         |import json, pathlib, sys
         |out, err, limit = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), int(sys.argv[3])
+        |engine_exit = int(sys.argv[4])
         |try:
         |    data = json.loads(out.read_text(encoding="utf-8"))
         |except Exception as exc:
         |    tail = err.read_text(encoding="utf-8", errors="replace")[-800:]
-        |    print(json.dumps({"ok": False, "verdict": "error", "summary": f"엔진 출력을 해석하지 못했어요: ${'$'}{exc}", "stderr": tail}, ensure_ascii=False))
+        |    print(json.dumps({"ok": False, "verdict": "error", "needs_browser": False, "untried_routes": [], "stop_reason": "엔진 결과를 읽지 못했어요.", "summary": f"엔진 출력을 해석하지 못했어요: {exc}", "stderr": tail}, ensure_ascii=False))
         |    raise SystemExit(0)
         |keep = {k: data.get(k) for k in (
         |    "ok", "verdict", "final_url", "summary", "prompt_injection_risk",
-        |    "untried_routes", "must_invoke_playwright_mcp", "stop_reason",
+        |    "untried_routes", "needs_browser", "stop_reason",
         |)}
         |keep["untrusted_text"] = (data.get("untrusted_text") or "")[:limit]
+        |if engine_exit != 0 or not keep["untrusted_text"].strip():
+        |    keep["ok"] = False
         |if not keep.get("ok"):
         |    keep["stderr"] = err.read_text(encoding="utf-8", errors="replace")[-800:]
         |print(json.dumps(keep, ensure_ascii=False))

@@ -47,7 +47,7 @@ val engineZip = tasks.register<Zip>("insaneSearchEngineZip") {
             "DISCLAIMER.md",
             "UPSTREAM_COMMIT",
         )
-        exclude("engine/tests/**", "**/__pycache__/**", "**/*.pyc")
+        exclude("engine/tests/**", "engine/templates/**", "**/package.json", "**/node_modules/**", "**/__pycache__/**", "**/*.pyc")
     }
     from(repositoryRoot) {
         include("LICENSE", "DISCLAIMER.md", "UPSTREAM_COMMIT")

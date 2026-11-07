@@ -9,9 +9,14 @@
 
 - `engine/phase0.py`의 Reddit·YouTube 판정을 호스트 접미사 포함 검사에서 정확한 호스트/서브도메인 검사로 바꿨어요. `reddit.com.evil.com` 같은 위장 호스트가 Phase 0로 분류되지 않아요.
 - `_cffi_get`이 리다이렉트를 자동으로 따라가지 않고, 홉마다 `safety.classify_url`로 공용 주소인지 확인한 뒤 다음 요청을 보내요. 사설·루프백·메타데이터 주소로의 리다이렉트는 요청 전에 거부해요.
-- `insane-search/engine/`는 이 저장소가 단일 원천이고, `plugin` 모듈이 `engine.zip`으로 묶어 APK 자산 `assets/plugins/insane-search/engine.zip`에 넣어요.
-- `com.sleepysoong.logent.insane-search` 플러그인이 `ensureReady`에서 APK 경로와 `unzip`으로 자산을 `~/.logent/plugins/insane-search/engine`에 staging·검증·원자 교체하고, Python 의존성을 확인한 뒤 마지막에 `VERSION`을 기록해요.
+- `skills/insane-search/engine/`는 이 저장소가 단일 원천이고, `plugin` 모듈이 `engine.zip`으로 묶어 APK 자산 `assets/plugins/insane-search/engine.zip`에 넣어요.
+- `com.sleepysoong.logent.insane-search` 플러그인이 `ensureReady`에서 APK 경로와 `unzip`으로 자산을 `~/.logent/plugins/insane-search/engine`에 staging·검증·원자 교체해요. 배포 표식이 같아도 Python 의존성 import를 먼저 검증하고, 새 표식은 성공한 뒤에만 기록해요.
 - 플러그인은 `PageRescueService`로 코어의 `web_fetch` 구조 요청을 받아 `verdict`·`untried_routes`·`needsBrowser`를 그대로 돌려줘요. Brave 키를 받을 비밀 API가 아직 없어서 무키 경로로 실행해요.
 - 원본의 `references/`·`tests/`·`engine/tests/`는 저장소에 보존하지만, APK의 실행 ZIP에는 엔진 실행에 필요한 파일만 넣어요.
+- Android Python 3.14/ARM64에서 기존 ABI의 확장 모듈을 재사용하지 않도록 `curl_cffi>=0.17.0`과 `cffi>=2.1.1`을 재설치해요. Termux의 clang·pkg-config·libffi로 CFFI 소스 빌드를 준비하고 Python이나 pip 자체는 업그레이드하지 않아요. 설치 실패 진단은 길이를 제한하고 환경의 키·토큰과 URL을 가려요.
+- 로컬 브라우저 실행기와 템플릿은 제거했어요. 기본 실행과 `--no-playwright` 모두 HTTP-only이며, 브라우저가 필요한 실패는 `needs_browser`와 `untried_routes: ["browser_use"]`로 모델에 정식 `browser_use` 호출을 안내해요. 로그인·CAPTCHA·보안 모듈·차단을 우회하지 않아요.
+- 루트 `logent-plugin.json`에서 ID·`sleepysoong:insane_search` 키·`sleepysoong:browser_use` 필수 참조·API 범위를 정의해 서명 manifest에 함께 넣어요. GitHub 소유자와 publisher 별칭은 별개예요.
+- HTTP profile 계획에 필요한 import를 복구했어요. 실패 JSON에 원문 경계나 차단 본문이 있어도 성공 본문으로 반환하지 않고 브라우저 인계 진단만 유지해요.
+- CI 태그 릴리스에서 직접 배포한 운영 서명 `.lpg`는 오래된 CI 자산 정리와 구분해 보존해요.
 
 원본 라이선스와 저작권 고지는 `LICENSE`에 그대로 보존했어요.

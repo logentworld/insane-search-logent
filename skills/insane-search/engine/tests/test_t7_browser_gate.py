@@ -1,229 +1,185 @@
 #!/usr/bin/env python3
-"""Regression tests — browser-fallback gate + MCP-stub budget accounting.
-
-Deterministic, network-free (every collaborator is monkeypatched). Locks in
-two fixes to fetch_chain._fetch_core:
-
-  Bug 1 — the two roles of TERMINAL_NONSUCCESS are separated:
-    * a 429 (rate_limited) stops the TLS grid but MUST still run the browser
-      fallback chain (transient — R6 gate / SKILL.md route it to browser/MCP).
-    * a 404 (not_found) is a real wall — the browser is skipped.
-
-  Bug 2 — a "playwright_mcp" fallback entry is a zero-work stub the engine
-    cannot launch from Python. It must be RECORDED in the trace but must NOT
-    consume a max_browser_attempts slot, or cloudflare_turnstile's
-    [playwright_mcp, protocol_stealth_chrome, playwright_real_chrome] would burn
-    both slots (max=2) before the real Chrome executor is ever reached.
-
-Run:  python3 engine/tests/test_t7_browser_gate.py
-"""
+"""HTTP 수집과 모델 browser_use 인계의 실제 결과를 검증해요."""
 from __future__ import annotations
 
+import io
+import json
 import os
 import sys
+import unittest
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-sys.path.insert(0, ROOT)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-# Kill the polite grid jitter so the test never really sleeps (read per-call
-# from the env inside _fetch_core).
-os.environ["INSANE_JITTER_MS_MIN"] = "0"
-os.environ["INSANE_JITTER_MS_MAX"] = "0"
+from engine import __main__ as cli
+from engine import fetch_chain as fc
+from engine import observations_log, phase0, safety, transport
 
-import engine.fetch_chain as fc          # noqa: E402
-import engine.executor as ex             # noqa: E402
-from engine.fetch_chain import Attempt, _fetch_core  # noqa: E402
-from engine.validators import Verdict    # noqa: E402
+URL = "https://public.example/article"
+ARTICLE = "<html><body><article>" + "공개 기사 본문을 읽을 수 있어요. " * 400 + "</article></body></html>"
 
 
-class _FakeResp:
-    def __init__(self, url):
-        self.text = ""
-        self.content = b""
-        self.url = url
-        self.status_code = 0
+def response(status=200, text=ARTICLE):
+    return SimpleNamespace(status_code=status, text=text, content=text.encode(), url=URL,
+                           headers={"content-type": "text/html"},
+                           cookies=SimpleNamespace(jar=[]))
 
 
-class _FakeCand:
-    """Minimal stand-in for fetch_chain._Cand (only fields the grid loop reads)."""
-    profile_id = "cloudflare_turnstile"
-    transform = "original"
-    impersonate = "chrome"
-    referer = "none"
-    known_bad_sizes = None
-
-    def __init__(self, url):
-        self.url = url
-
-
-def _install_common_patches(*, probe_verdict, grid_verdict, fb_order):
-    """Patch _fetch_core's collaborators. Returns (restore_fn, browser_calls)."""
-    saved = {
-        "_run_attempt": fc._run_attempt,
-        "detect": fc.detect,
-        "_build_plan": fc._build_plan,
-        "load_profile": fc.load_profile,
-        "ex_run_pw": ex.run_playwright_fallback,
-    }
-    browser_calls: list[str] = []
-
-    def fake_run_attempt(url, *, phase, **kw):
-        att = Attempt(phase=phase, executor="curl_cffi", url=url,
-                      url_transform="original", impersonate="chrome", referer="none")
-        att.verdict = probe_verdict if phase == "probe" else grid_verdict
-        att.status = 429 if att.verdict == Verdict.RATE_LIMITED.value else 0
-        return att, _FakeResp(url)
-
-    def fake_detect(resp, profiles=None):
-        return [SimpleNamespace(profile_id="cloudflare_turnstile",
-                                confidence=0.9, signals=[])]
-
-    def fake_build_plan(url, hits, profiles, device_class, probe_impersonate,
-                        probe_referer, priority=None):
-        return [_FakeCand(url)]
-
-    def fake_load_profile(pid, profiles=None):
-        return {"fallback_when_challenge": list(fb_order)}
-
-    def fake_run_pw(url, *, profile_id, success_selectors=None, device_class="auto",
-                    timeout=90, profile_dir=None, force_executor=None):
-        browser_calls.append(force_executor)
-        att = Attempt(phase="fallback", executor=force_executor, url=url,
-                      url_transform="original", impersonate=None, referer="")
-        # MCP → zero-work UNKNOWN stub; real executors here also "fail" (UNKNOWN)
-        # so the loop keeps walking the fallback order.
-        att.verdict = Verdict.UNKNOWN.value
-        return att, ""
-
-    fc._run_attempt = fake_run_attempt
-    fc.detect = fake_detect
-    fc._build_plan = fake_build_plan
-    fc.load_profile = fake_load_profile
-    ex.run_playwright_fallback = fake_run_pw
-
-    def restore():
-        fc._run_attempt = saved["_run_attempt"]
-        fc.detect = saved["detect"]
-        fc._build_plan = saved["_build_plan"]
-        fc.load_profile = saved["load_profile"]
-        ex.run_playwright_fallback = saved["ex_run_pw"]
-
-    return restore, browser_calls
+@contextmanager
+def http_only(reply=None, error=None, phase0_result=None):
+    """전송 경계만 대체하고 예외 처리와 검증, CLI 직렬화는 그대로 사용해요."""
+    session = Mock()
+    if error is not None:
+        session.get.side_effect = error
+    else:
+        session.get.return_value = reply
+    entry = SimpleNamespace(session=session, injected_ua=None, requests_made=0)
+    candidate = SimpleNamespace(profile_id="generic", transform="original", url=URL,
+                                impersonate="chrome", referer="none", known_bad_sizes=None)
+    with ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, {
+            "INSANE_LEARN": "0", "INSANE_JITTER_MS_MIN": "0", "INSANE_JITTER_MS_MAX": "0",
+        }))
+        stack.enter_context(patch.object(safety, "classify_url", return_value=(True, "")))
+        stack.enter_context(patch.object(transport, "pool_enabled", return_value=False))
+        stack.enter_context(patch.object(transport, "available_impersonates", return_value=None))
+        stack.enter_context(patch.object(transport.POOL, "get", return_value=entry))
+        stack.enter_context(patch.object(fc, "_load_profiles", return_value={}))
+        stack.enter_context(patch.object(fc, "last_load_error", return_value=None))
+        stack.enter_context(patch.object(fc, "detect", return_value=[]))
+        stack.enter_context(patch.object(fc, "_build_plan", return_value=[candidate]))
+        stack.enter_context(patch.object(phase0, "route", return_value=phase0_result))
+        stack.enter_context(patch.object(observations_log, "log_fetch"))
+        launch = stack.enter_context(patch("subprocess.Popen"))
+        yield session, launch
+        launch.assert_not_called()
 
 
-def _run(url, *, probe_verdict, grid_verdict, fb_order, max_browser_attempts=2):
-    restore, browser_calls = _install_common_patches(
-        probe_verdict=probe_verdict, grid_verdict=grid_verdict, fb_order=fb_order)
-    try:
-        result = _fetch_core(
-            url, enable_phase0=False, enable_retry=False,
-            enable_extraction=False, enable_markdown=False,
-            max_browser_attempts=max_browser_attempts,
-        )
-    finally:
-        restore()
-    return result, browser_calls
+class BrowserHandoffTests(unittest.TestCase):
+    def assert_handoff(self, result):
+        self.assertFalse(result.ok)
+        self.assertTrue(result.needs_browser)
+        self.assertEqual(result.untried_routes, ["browser_use"])
+        payload = result.to_dict()
+        self.assertIs(payload["needs_browser"], True)
+        self.assertNotIn("must_invoke_playwright_mcp", payload)
+        self.assertTrue(result.trace)
+        self.assertTrue(all(attempt.executor == "curl_cffi" for attempt in result.trace))
 
+    def test_http_success_does_not_request_browser(self):
+        with http_only(response()) as (session, _):
+            result = fc.fetch(URL, success_selectors=["article"], enable_markdown=False)
+        self.assertTrue(result.ok)
+        self.assertFalse(result.needs_browser)
+        self.assertEqual(result.untried_routes, [])
+        self.assertEqual(result.content, ARTICLE)
+        session.get.assert_called_once()
 
-def t_429_stop_still_runs_browser_fallback() -> None:
-    # Probe CHALLENGE → grid returns 429 → grid stops with stop_reason=rate_limited.
-    result, browser_calls = _run(
-        "https://ratelimited.test/",
-        probe_verdict=Verdict.CHALLENGE.value,
-        grid_verdict=Verdict.RATE_LIMITED.value,
-        fb_order=["playwright_real_chrome"],
-    )
-    assert result.stop_reason == Verdict.RATE_LIMITED.value, \
-        f"expected stop_reason=rate_limited, got {result.stop_reason}"
-    assert browser_calls == ["playwright_real_chrome"], \
-        f"429 must NOT skip the browser fallback, got calls={browser_calls}"
-    # And the R6 gate messaging still fires for 429 (transient, not a wall).
-    assert result.must_invoke_playwright_mcp is True
-    assert any("rate-limited" in r.lower() for r in result.untried_routes), \
-        f"rate_limited gate message missing: {result.untried_routes}"
-    print(f"  ✓ 429 stops grid but still runs browser fallback {browser_calls} "
-          f"(gate must_mcp={result.must_invoke_playwright_mcp})")
+    def test_public_403_hands_off_without_launching_browser(self):
+        for options in ({}, {"enable_playwright": True}, {"enable_playwright": False}):
+            with self.subTest(options=options), http_only(response(403)):
+                result = fc.fetch(URL, **options)
+            self.assert_handoff(result)
+            self.assertEqual(result.trace[-1].status, 403)
 
+    def test_public_403_runs_real_http_profile_plan_before_handoff(self):
+        build_plan = fc._build_plan
+        hit = SimpleNamespace(profile_id="unknown_challenge")
+        with http_only(response(403)) as (session, _), \
+                patch.object(fc, "_build_plan", build_plan), \
+                patch.object(fc, "detect", return_value=[hit]):
+            result = fc.fetch(URL, max_attempts=2)
+        self.assert_handoff(result)
+        self.assertEqual(result.trace[-1].status, 403)
+        self.assertEqual(session.get.call_count, 2)
 
-def t_404_stop_skips_browser_fallback() -> None:
-    # Probe CHALLENGE → grid returns 404 → real wall → browser is skipped.
-    result, browser_calls = _run(
-        "https://notfound.test/",
-        probe_verdict=Verdict.CHALLENGE.value,
-        grid_verdict=Verdict.NOT_FOUND.value,
-        fb_order=["playwright_real_chrome"],
-    )
-    assert result.stop_reason == Verdict.NOT_FOUND.value, \
-        f"expected stop_reason=not_found, got {result.stop_reason}"
-    assert browser_calls == [], \
-        f"404 must skip the browser fallback, got calls={browser_calls}"
-    print("  ✓ 404 skips the browser fallback (real wall)")
+    def test_transport_exception_cannot_become_success(self):
+        with http_only(error=RuntimeError("전송에 실패했어요.")):
+            result = fc.fetch(URL)
+        self.assert_handoff(result)
+        self.assertEqual(result.content, "")
+        self.assertTrue(all(attempt.error for attempt in result.trace))
 
+    def test_empty_success_status_cannot_become_success(self):
+        for text in ("", "   \n\t"):
+            with self.subTest(text=text), http_only(response(200, text)):
+                result = fc.fetch(URL)
+            self.assert_handoff(result)
 
-def t_mcp_stub_does_not_consume_browser_budget() -> None:
-    # Turnstile order: [playwright_mcp, protocol_stealth_chrome, playwright_real_chrome]
-    # with max_browser_attempts=2. The MCP stub must NOT eat a budget slot, so
-    # BOTH real executors (protocol_stealth + real_chrome) must still be reached.
-    result, browser_calls = _run(
-        "https://turnstile.test/",
-        probe_verdict=Verdict.CHALLENGE.value,
-        grid_verdict=Verdict.CHALLENGE.value,   # grid exhausts (non-terminal)
-        fb_order=["playwright_mcp", "protocol_stealth_chrome", "playwright_real_chrome"],
-        max_browser_attempts=2,
-    )
-    assert browser_calls == [
-        "playwright_mcp", "protocol_stealth_chrome", "playwright_real_chrome"], \
-        f"real Chrome must be reached after the MCP stub, got {browser_calls}"
-    assert "playwright_real_chrome" in browser_calls, "real Chrome executor was starved"
-    # The stub is still recorded in the trace / route output.
-    assert any(a.executor.startswith("playwright_mcp") for a in result.trace), \
-        "MCP-stub attempt must still be recorded in the trace"
-    print(f"  ✓ MCP stub recorded but budget-free; real Chrome reached {browser_calls}")
+    def test_rich_error_body_cannot_become_success(self):
+        for status in (429, 500, 503):
+            with self.subTest(status=status), http_only(response(status)):
+                result = fc.fetch(URL, enable_retry=False)
+            self.assert_handoff(result)
+            self.assertEqual(result.trace[-1].status, status)
 
+    def test_http200_security_page_is_not_collected_content(self):
+        text = "<html><body>Checking your browser. Verify you are human. CAPTCHA</body></html>"
+        with http_only(response(200, text)):
+            result = fc.fetch(URL)
+        self.assert_handoff(result)
+        self.assertNotIn(result.verdict, ("strong_ok", "weak_ok"))
 
-def t_mcp_budget_cap_still_bounds_real_executors() -> None:
-    # Guard against over-correction: MCP is free, but real executors are still
-    # capped. With max=1 and [playwright_mcp, protocol_stealth, real_chrome],
-    # only ONE real executor runs (the MCP stub does not lift the cap).
-    _result, browser_calls = _run(
-        "https://turnstile2.test/",
-        probe_verdict=Verdict.CHALLENGE.value,
-        grid_verdict=Verdict.CHALLENGE.value,
-        fb_order=["playwright_mcp", "protocol_stealth_chrome", "playwright_real_chrome"],
-        max_browser_attempts=1,
-    )
-    assert browser_calls == ["playwright_mcp", "protocol_stealth_chrome"], \
-        f"real-executor budget (max=1) must still bound the loop, got {browser_calls}"
-    print(f"  ✓ real-executor cap still enforced with MCP free {browser_calls}")
+    def test_authentication_and_missing_page_do_not_escalate(self):
+        for status in (401, 404):
+            with self.subTest(status=status), http_only(response(status)):
+                result = fc.fetch(URL)
+            self.assertFalse(result.ok)
+            self.assertFalse(result.needs_browser)
+            self.assertEqual(result.untried_routes, [])
 
+    def test_phase0_success_remains_http_only(self):
+        p0 = {"ok": True, "content": ARTICLE, "final_url": URL,
+              "platform": "fixture", "route": "public_api",
+              "attempts": [{"route": "public_api", "ok": True, "status": 200}]}
+        with http_only(response(403), phase0_result=p0) as (session, _):
+            result = fc.fetch(URL)
+        self.assertTrue(result.ok)
+        self.assertFalse(result.needs_browser)
+        self.assertEqual(result.untried_routes, [])
+        self.assertEqual(result.content, ARTICLE)
+        session.get.assert_not_called()
 
-def t_executor_mcp_stub_is_zero_work() -> None:
-    # The contract bug 2 relies on: the executor returns a UNKNOWN stub for a
-    # "playwright_mcp" choice WITHOUT launching any browser (fully offline).
-    att, content = ex.run_playwright_fallback(
-        "https://turnstile.test/", profile_id="cloudflare_turnstile",
-        force_executor="playwright_mcp")
-    assert att.verdict == Verdict.UNKNOWN.value, f"stub verdict was {att.verdict}"
-    assert content == "", "stub must not return rendered content"
-    assert "MCP" in (att.error or ""), f"stub error missing MCP note: {att.error!r}"
-    print("  ✓ executor 'playwright_mcp' choice is a zero-work UNKNOWN stub")
+    def test_phase0_exception_preserves_http_failure(self):
+        with http_only(response(403)), patch.object(
+                phase0, "route", side_effect=RuntimeError("공개 API에 실패했어요.")):
+            result = fc.fetch(URL)
+        self.assertFalse(result.ok)
+        self.assertTrue(result.needs_browser)
+        self.assertEqual(result.untried_routes, ["browser_use"])
+        self.assertTrue(any(attempt.phase == "phase0" and attempt.error
+                            for attempt in result.trace))
 
+    def test_phase0_empty_or_http_error_cannot_become_success(self):
+        for status, content in ((200, ""), (200, "  \n"), (403, ARTICLE)):
+            p0 = {"ok": True, "content": content, "final_url": URL,
+                  "platform": "fixture", "route": "public_api",
+                  "attempts": [{"route": "public_api", "ok": True, "status": status}]}
+            with self.subTest(status=status, content=bool(content)), http_only(
+                    response(403), phase0_result=p0):
+                result = fc.fetch(URL)
+            self.assertFalse(result.ok)
+            self.assertTrue(result.needs_browser)
+            self.assertEqual(result.untried_routes, ["browser_use"])
 
-def main() -> int:
-    tests = [v for k, v in sorted(globals().items())
-             if k.startswith("t_") and callable(v)]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-        except AssertionError as e:
-            print(f"  ✗ {test.__name__}: {e}")
-            failed += 1
-    print(f"\n{'OK' if failed == 0 else 'FAIL'}: {len(tests) - failed}/{len(tests)} passed")
-    return 1 if failed else 0
+    def test_cli_default_and_no_playwright_are_http_only(self):
+        for flags in ([], ["--no-playwright"]):
+            with self.subTest(flags=flags), http_only(response(403)):
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = cli.main([URL, "--json-content", *flags])
+            self.assertEqual(code, 1)
+            payload = json.loads(stdout.getvalue())
+            self.assertFalse(payload["ok"])
+            self.assertIs(payload["needs_browser"], True)
+            self.assertEqual(payload["untried_routes"], ["browser_use"])
+            self.assertNotIn("must_invoke_playwright_mcp", payload)
+            self.assertIn("browser_use", stderr.getvalue())
+            self.assertTrue(all(attempt["executor"] == "curl_cffi" for attempt in payload["trace"]))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    unittest.main()

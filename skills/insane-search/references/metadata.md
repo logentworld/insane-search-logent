@@ -111,6 +111,6 @@ print(decoded[:3000])
 
 - Phase 1에서 curl로 HTML 받음 → JSON-LD도 추출
 - Phase 2에서 curl_cffi로 HTML 받음 → JSON-LD도 추출
-- Phase 3에서 Playwright로 DOM 받음 → `browser_evaluate`로 JSON-LD 추출
+- 외부 브라우저가 필요하면 모델이 공식 `browser_use`로 공개 페이지를 읽고 반환한 메타데이터를 확인해요. 로컬 DOM 평가나 MCP 도구를 설치하지 않아요.
 
 본문은 못 가져와도 JSON-LD에서 **상품 가격, 기사 요약, 프로필 정보**는 확보될 수 있다.

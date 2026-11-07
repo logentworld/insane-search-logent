@@ -1,4 +1,4 @@
-"""CLI content and diagnostic parity with exactly one retrieval."""
+"""CLI가 한 번의 HTTP 수집으로 본문과 진단을 함께 반환하는지 검증해요."""
 from __future__ import annotations
 
 import io
@@ -22,12 +22,12 @@ class CliResultTests(unittest.TestCase):
             with self.subTest(ok=ok):
                 result = FetchResult(
                     ok=ok, content="fixture page body", final_url="https://example.com/article",
-                    verdict="strong_ok" if ok else "challenge", summary="fixture summary",
+                    verdict="strong_ok" if ok else "challenge", summary="수집 결과를 확인했어요.",
                     trace=[Attempt("probe", "fixture", "https://example.com/article",
                                    "original", None, "", status=200 if ok else 403)],
                     planned_attempts=1, executed_attempts=1,
-                    untried_routes=[] if ok else ["browser"],
-                    must_invoke_playwright_mcp=not ok,
+                    untried_routes=[] if ok else ["browser_use"],
+                    needs_browser=not ok,
                 )
                 stdout, stderr = io.StringIO(), io.StringIO()
                 with patch.object(cli, "fetch", return_value=result) as fetch, \
@@ -38,8 +38,9 @@ class CliResultTests(unittest.TestCase):
                 payload = json.loads(stdout.getvalue())
                 self.assertEqual(payload["executed_attempts"], 1)
                 self.assertEqual(payload["trace"][0]["status"], 200 if ok else 403)
-                self.assertEqual(payload["untried_routes"], [] if ok else ["browser"])
-                self.assertEqual(payload["must_invoke_playwright_mcp"], not ok)
+                self.assertEqual(payload["untried_routes"], [] if ok else ["browser_use"])
+                self.assertIs(payload["needs_browser"], not ok)
+                self.assertNotIn("must_invoke_playwright_mcp", payload)
                 self.assertEqual(payload["content_length"], len("fixture page body"))
                 self.assertIn("fixture page body", payload["untrusted_text"])
                 self.assertLess(payload["untrusted_text"].index(BEGIN_UNTRUSTED_WEB_CONTENT),

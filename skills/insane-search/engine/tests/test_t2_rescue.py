@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests — content-rescue extraction (PDF / JSON-LD / render-merge).
-
-Deterministic, network-free. Locks in:
-  * ordinary HTML success keeps the RAW body (source=raw) — no contract break
-  * JSON-LD articleBody rescues an SPA shell whose visible text is thin
-  * a JSON-LD teaser NEVER beats a full article body (the gate that kept the
-    og:description class of bug out of this chain)
-  * PDF magic bytes detected even under a wrong text/html content-type
-  * a .pdf URL that serves plain HTML is re-guarded back to the HTML path
-  * blank PDF → pdf_no_text_layer (skipped when pypdf is unavailable)
-  * render-merge: innerText wins for an SPA shell, loses to a rich body
-  * enable_extraction=False returns raw text (source=raw_disabled)
-  * FetchResult carries extraction_quality / extraction_source / extraction_meta
-
-Run:  python3 engine/tests/test_t2_rescue.py
-"""
+"""HTTP 응답의 PDF·JSON-LD 추출과 크기 제한을 검증해요."""
 from __future__ import annotations
 
 import io
@@ -115,26 +100,6 @@ def t_pdf_extraction_through_pypdf() -> None:
     assert err == "pdf_no_text_layer", f"got {err}"
     assert text == ""
     print(f"  ✓ blank PDF → pdf_no_text_layer (err={err})")
-
-
-def t_inner_text_wins_for_shell() -> None:
-    shell = "<html><body><div id='root'></div></body></html>"
-    inner = "Real visible text harvested from innerText. " * 20
-    _t, content, _q, meta = _extract_response(
-        _FakeResp(shell), "https://x.test/x", inner_text=inner)
-    assert meta["inner_text_used"] is True, f"innerText should win for SPA shell; meta={meta}"
-    assert meta["source"].endswith("+inner_text")
-    assert len(content) > 200
-    print(f"  ✓ render-merge: innerText wins for SPA shell (len={len(content)})")
-
-
-def t_inner_text_loses_to_rich_body() -> None:
-    inner = "Short cookie banner text."
-    _t, content, _q, meta = _extract_response(
-        _FakeResp(_ARTICLE), "https://x.test/a", inner_text=inner, enable_markdown=False)
-    assert meta["inner_text_used"] is False, "thin innerText must not clobber a rich body"
-    assert content == _ARTICLE
-    print("  ✓ render-merge: thin innerText never clobbers a rich body")
 
 
 def t_extraction_disabled_returns_raw() -> None:
@@ -269,23 +234,12 @@ def t_ceiling_pdf_text_capped() -> None:
     print(f"  ✓ ceiling: PDF extracted text capped (len={len(text)})")
 
 
-def t_ceiling_inner_text_capped() -> None:
-    shell = "<html><body><div id='root'></div></body></html>"
-    inner = "Rendered visible sentence. " * 200
-    with _patched(_INNER_TEXT_MAX=300):
-        _t, content, _q, meta = _extract_response(
-            _FakeResp(shell), "https://x.test/x", inner_text=inner)
-    assert meta["inner_text_used"] is True and len(content) <= 300, \
-        f"innerText must be truncated before merge; len={len(content)}"
-    print(f"  ✓ ceiling: innerText capped before merge (len={len(content)})")
-
-
 def t_fetch_result_carries_extraction_meta() -> None:
     r = FetchResult(
         ok=True, content="hello",
         extraction_quality=0.7,
         extraction_source="json_ld",
-        extraction_meta={"source": "json_ld", "inner_text_used": False},
+        extraction_meta={"source": "json_ld"},
     )
     d = r.to_dict()
     assert d["extraction_quality"] == 0.7

@@ -63,30 +63,22 @@ The skill is organized as a set of reference files (`skills/insane-search/refere
 | `naver.md` | Naver Search (curl_cffi), blog mobile URLs, Finance JSON API |
 | `rss.md` | Korean news RSS (9 outlets), Google News RSS, feedparser, SearXNG |
 | `tls-impersonate.md` | curl_cffi multi-target + identity spoofing (cookie warming, referrer chain) + behavioral challenge detection |
-| `playwright.md` | Playwright MCP full toolkit (snapshot, evaluate, network_requests) |
+| `playwright.md` | 정식 browser_use 인계와 HTTP-only 경계를 설명해요. |
 | `cache-archive.md` | Google AMP cache, archive.today, Wayback Machine |
 | `metadata.md` | OGP, JSON-LD, Schema.org, Next.js RSC payload extraction |
 
 ## Dependencies
 
-**Required:** Claude Code only.
+Logent 플러그인은 Termux의 Python을 사용해요. `ensureReady`가 필요한 Python
+라이브러리만 설치하며 Python·pip 자체는 업그레이드하지 않아요.
+`curl_cffi>=0.17.0`, `beautifulsoup4`, `pyyaml`, `pypdf`, `markdownify`, `yt-dlp`가
+필요해요. Android는 `cffi>=2.1.1` 소스 빌드를 위해 Termux `pkg`의 clang·libffi·
+pkg-config와 Python 빌드용 setuptools·wheel·pycparser를 준비해요.
 
-**Auto-installed when needed** (the skill installs these transparently on first use):
-
-```bash
-pip install curl_cffi    # TLS impersonation for WAF-blocked sites (>= 0.15.0)
-pip install feedparser   # RSS/Atom parsing
-pip install yt-dlp       # 1,858 media sites
-```
-
-**Optional, improves coverage:**
-
-```bash
-brew install gh                      # GitHub (faster than REST API)
-claude mcp add playwright -- npx @playwright/mcp@latest   # JS-rendered sites
-```
-
-If a dependency is missing, the skill doesn't skip the method — it installs the dependency and tries.
+브라우저가 필요하면 `needs_browser`와 `untried_routes: ["browser_use"]`를 반환하고
+모델이 정식 `browser_use`를 호출해요. 로컬 브라우저나 MCP 서버를 설치하지 않아요.
+인증·CAPTCHA·보안 확인·차단은 우회하지 않아요. manifest의 공개 의존성
+`sleepysoong:browser_use`는 가용성 확인만 담당하고 일반 준비를 자동 실행하지 않아요.
 
 ## What insane-search is not
 

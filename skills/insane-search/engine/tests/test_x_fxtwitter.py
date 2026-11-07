@@ -156,14 +156,14 @@ def t_switch_off():
 
 
 def t_flag_reaches_fetch_result():
-    """phase0 표시가 FetchResult.extraction_meta와 summary까지 전달된다."""
+    """Phase 0의 생략 가능성이 메타데이터와 한국어 요약에 전달되는지 검증해요."""
     from engine.fetch_chain import fetch
     _install({"tweet-result": _synd(LONG_TEXT[:280], note_tweet={"id": "x"}),
               "api.fxtwitter.com": RuntimeError("boom")})
     res = fetch(URL, enable_playwright=False)
     assert res.ok, res.summary
     assert res.extraction_meta.get("truncated_possible") is True, res.extraction_meta
-    assert "truncated_possible" in res.summary, res.summary
+    assert "일부 내용이 생략될 수 있어요" in res.summary, res.summary
 
 
 # ── network (re-measure 2026-10-08 sample) ────────────────────────────────

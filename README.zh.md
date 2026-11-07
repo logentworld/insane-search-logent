@@ -54,24 +54,24 @@
 
 ## ⚙️ 为什么能突破
 
-- **逐级升级，从不预设放弃** —— 公开 API 阅读器 → 聚合网关 → TLS 指纹伪装 → 真实无头浏览器，逐条路径尝试直到有一条成功。
-- **看起来像真人** —— 不只是替换 User-Agent，而是构建完整的浏览器身份（真实 TLS 指纹、Cookie 预热、Referer 链）。
-- **找出隐藏 API** —— 监听真实浏览器的网络流量，复用站点自身的内部 JSON。
+- **HTTP 수집과 브라우저를 분리해요** — 공개 API·피드와 HTTP Phase 0~3 경로를 먼저 사용해요.
+- **로컬 브라우저는 실행하지 않아요** — 옵션 생략과 `enable_playwright=True`도 HTTP-only예요. `--no-playwright`는 호환 스위치예요.
+- **모델이 공식 도구를 호출해요** — `needs_browser=true`, `untried_routes=["browser_use"]`이면 모델이 `sleepysoong:browser_use`의 `browser_use`로 공개 페이지를 확인해요.
 - **零配置** —— 首次使用时自动安装所需工具（`curl_cffi`、`yt-dlp` 等）。无需 API 密钥，无需注册。
 
 ## 🆚 默认 Claude Code vs `+ insane-search`
 
 | 当你遇到… | 仅 Claude Code | `+ insane-search` |
 | :--- | :--- | :--- |
-| `403` / WAF 拦截的页面 | ✖ 放弃 | ✓ 持续升级直到有一条路径成功 |
+| 공개 페이지의 HTTP 403 | 수집에 실패할 수 있어요. | HTTP 진단을 반환하고 필요하면 모델이 공식 `browser_use`를 호출해요. |
 | 平台内容（X、Reddit、HN） | ✖ 常被拦或为空 | ✓ 公开 API 阅读器 + 聚合源 |
-| 反爬 / CAPTCHA 挑战 | ✖ 停止 | ✓ TLS 伪装，必要时真实无头浏览器 |
+| CAPTCHA·보안 확인·접근 차단 | 중단해요. | 우회하지 않고 수집 한계를 알려요. |
 | 媒体页面（YouTube 等 1,800+ 站） | ✖ 无字幕 | ✓ `yt-dlp` 元数据 + 字幕 |
 | 缺少工具（`curl_cffi`、`yt-dlp`） | — | ✓ 首次使用自动安装 |
 | API 密钥 / 注册 | — | ✓ 不需要 |
 | **登录墙或付费墙** | ✖ | ✖ **到此为止，并如实说明**（见 Boundaries） |
 
-真正拉开差距的是默认抓取做不到的那一行：**它会持续尝试公开路径，直到有一条成功。**
+HTTP 예외·빈 본문·오류 응답은 성공으로 바꾸지 않아요. 브라우저가 필요하면 모델이 공식 도구를 호출하며, 실제 결과만 근거로 사용해요.
 
 ## ✨ 刚刚发生了什么
 
@@ -83,7 +83,7 @@
 
 ## 🔁 工作原理
 
-<img src="assets/pipeline.png" width="860" alt="Phase 0→3 升级管线：被拦截的 URL 依次经过官方公开端点 → 轻量探测 → TLS 伪装 → 真实无头浏览器，直到有一条返回干净的公开内容；遇到登录或付费墙则以 'authentication required' 停止。每个响应都会扫描 OGP / JSON-LD。">
+HTTP Phase 0~3 수집과 진단을 유지하고 외부 브라우저 호출은 모델에 인계해요. 엔진은 브라우저나 MCP 서버를 설치하지 않아요.
 
 <details>
 <summary><strong>Phase 0→3 自适应调度器 —— 细节</strong></summary>
@@ -93,7 +93,7 @@
 - **Phase 0** —— 通用链路无法自行发现的官方公开端点（平台 API、订阅源）
 - **Phase 1** —— 轻量探测：公开 API 阅读器、聚合网关、移动版 / `.json` / `/rss` URL 变体
 - **Phase 2** —— TLS 指纹伪装（curl_cffi：safari → chrome → firefox）+ 完整浏览器身份
-- **Phase 3** —— 真实无头浏览器，同时暴露站点内部使用的公开 JSON API
+- **브라우저 인계** — HTTP 수집으로 본문을 얻지 못하고 `needs_browser=true`이면 모델이 공식 `browser_use`를 호출해요. HTTP 성공은 `needs_browser=false`예요.
 - **Exit** —— 检测到登录或付费墙：如实报告 *"authentication required"*，绝不伪装
 
 每个响应还会扫描 OGP / JSON-LD，因此即便是残缺页面也能产出标题、摘要和价格。
@@ -104,7 +104,7 @@
 insane-search 是**公开内容的阅读器**，不是绕过身份验证的工具。
 
 - 触达公开页面、公开 API、订阅源、存档以及浏览器公开响应中可获取的内容。
-- **在登录与付费墙前停止** —— 报告 `authentication required`，而不是设法攻破。
+- **인증·CAPTCHA·보안 확인·접근 차단에서 멈춰요** — 브라우저에서도 우회하지 않아요.
 - 绝不代你登录，绝不存储或传输凭据。
 - 所有路径只用无需认证的公开端点和标准的、有据可查的技术。
 
