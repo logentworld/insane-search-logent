@@ -1,7 +1,7 @@
-package dev.logent.insanesearch
+package com.sleepysoong.logent.insanesearch
 
-import dev.logent.plugin.PageRescueService
-import dev.logent.plugin.ProcessResult
+import com.sleepysoong.logent.plugin.PageRescueService
+import com.sleepysoong.logent.plugin.ProcessResult
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,7 +11,7 @@ import org.junit.Test
 class InsaneSearchPluginTest {
 
     private fun host(
-        apkPath: String = "/data/app/~~abc/dev.logent-1/base.apk",
+        apkPath: String = "/data/app/~~abc/com.sleepysoong.logent-1/base.apk",
         respond: (String) -> Result<ProcessResult> = {
             Result.success(ProcessResult(0, "INSANE_SEARCH_DEPLOYED", false))
         },
@@ -28,7 +28,7 @@ class InsaneSearchPluginTest {
     @Test
     fun `플러그인은 도구 없이 구조 서비스만 제공해요`() {
         val plugin = InsaneSearchPlugin()
-        assertEquals("dev.logent.insane-search", plugin.id)
+        assertEquals("com.sleepysoong.logent.insane-search", plugin.id)
         assertEquals(BuildConfig.PLUGIN_VERSION, plugin.version)
         assertTrue(plugin.tools().isEmpty())
         assertEquals(1, plugin.services().size)

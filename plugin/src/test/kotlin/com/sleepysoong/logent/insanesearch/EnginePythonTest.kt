@@ -1,4 +1,4 @@
-package dev.logent.insanesearch
+package com.sleepysoong.logent.insanesearch
 
 import java.io.File
 import java.util.concurrent.TimeUnit

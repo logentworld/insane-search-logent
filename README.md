@@ -7,7 +7,7 @@
 - 원본: `fivetaku/insane-search` v0.17.4 (`ead12c51633fa1e00ca8a048203da2439feb950e`, MIT)
 - 원본 README 원문: [`README.upstream.md`](README.upstream.md)
 - Logent 변경 내역: [`NOTICE`](NOTICE), [`docs/insane-search.md`](docs/insane-search.md)
-- 플러그인 id: `dev.logent.insane-search` (기존 설치와 같은 id를 유지해요)
+- 플러그인 id: `com.sleepysoong.logent.insane-search`
 
 ## 무엇을 하나요
 

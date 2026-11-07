@@ -14,7 +14,7 @@ val apiPin = Properties().apply {
 }
 
 android {
-    namespace = "dev.logent.insanesearch"
+    namespace = "com.sleepysoong.logent.insanesearch"
     compileSdk = 37
 
     defaultConfig {

@@ -1,11 +1,11 @@
-package dev.logent.insanesearch
+package com.sleepysoong.logent.insanesearch
 
-import dev.logent.plugin.LogentPlugin
-import dev.logent.plugin.PageRescueService
-import dev.logent.plugin.PluginHost
-import dev.logent.plugin.PluginService
-import dev.logent.plugin.PluginTool
-import dev.logent.plugin.WebRescue
+import com.sleepysoong.logent.plugin.LogentPlugin
+import com.sleepysoong.logent.plugin.PageRescueService
+import com.sleepysoong.logent.plugin.PluginHost
+import com.sleepysoong.logent.plugin.PluginService
+import com.sleepysoong.logent.plugin.PluginTool
+import com.sleepysoong.logent.plugin.WebRescue
 
 /**
  * insane-search 엔진을 APK 자산으로 배포하고 `web_fetch` 구조 요청을 맡는 플러그인이에요.
@@ -14,7 +14,7 @@ import dev.logent.plugin.WebRescue
  * [PageRescueService]로만 호출하고, 엔진 실패는 서비스 `Result` 실패로 돌려줘요.
  */
 class InsaneSearchPlugin : LogentPlugin, PageRescueService {
-    override val id: String = "dev.logent.insane-search"
+    override val id: String = "com.sleepysoong.logent.insane-search"
     override val name: String = "Insane Search"
     override val version: String = BuildConfig.PLUGIN_VERSION
 

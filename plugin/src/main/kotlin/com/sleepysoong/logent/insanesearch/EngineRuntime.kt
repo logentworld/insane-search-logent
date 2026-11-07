@@ -1,8 +1,8 @@
-package dev.logent.insanesearch
+package com.sleepysoong.logent.insanesearch
 
-import dev.logent.plugin.PluginHost
-import dev.logent.plugin.WebRescue
-import dev.logent.plugin.shellQuote
+import com.sleepysoong.logent.plugin.PluginHost
+import com.sleepysoong.logent.plugin.WebRescue
+import com.sleepysoong.logent.plugin.shellQuote
 import java.security.MessageDigest
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
