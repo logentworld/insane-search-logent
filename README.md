@@ -47,6 +47,7 @@ Android SDK 37, JDK 21, Python 3.11 이상이 필요해요. API artifact 4.0.0�
 `GITHUB_TOKEN`을 환경에서 받아요.
 
 ```bash
+python3 -m pip install beautifulsoup4
 ./scripts/test.sh --python-only
 ./scripts/test.sh
 LOGENT_CONTENT_SIGNING_KEY_FILE="$HOME/.local/share/logent/content-signing.pem" \

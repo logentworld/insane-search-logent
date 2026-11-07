@@ -18,5 +18,6 @@
 - 루트 `logent-plugin.json`에서 ID·`sleepysoong:insane_search` 키·`sleepysoong:browser_use` 필수 참조·API 범위를 정의해 서명 manifest에 함께 넣어요. GitHub 소유자와 publisher 별칭은 별개예요.
 - HTTP profile 계획에 필요한 import를 복구했어요. 실패 JSON에 원문 경계나 차단 본문이 있어도 성공 본문으로 반환하지 않고 브라우저 인계 진단만 유지해요.
 - CI 태그 릴리스에서 직접 배포한 운영 서명 `.lpg`는 오래된 CI 자산 정리와 구분해 보존해요.
+- CI와 로컬 검증 안내에 `beautifulsoup4` 설치를 명시했어요. HTML 성공 선택자 검증에 필요한 의존성을 준비하며, 의존성 누락 때 성공으로 판정하거나 회귀를 건너뛰지 않아요.
 
 원본 라이선스와 저작권 고지는 `LICENSE`에 그대로 보존했어요.
