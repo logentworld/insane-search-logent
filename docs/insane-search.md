@@ -60,7 +60,7 @@ Kotlin은 `needs_browser`를 `WebRescue.needsBrowser`로, `untried_routes`를
 로그인·CAPTCHA·보안 모듈·차단을 우회하지 않으며 인증 필요·404는 브라우저 재시도를
 강요하지 않아요. MCP 명령이나 로컬 브라우저 설치를 요구하지 않아요.
 
-공개 플러그인 의존성은 `sleepysoong:browser_use`예요. dependency는 manifest의
+`browser_use`는 코어 내장 도구예요. 플러그인 dependency는 manifest의
 가용성 gating일 뿐이고, 다른 플러그인의 일반 준비나 X11 시작을 자동 실행하지 않아요.
 
 ## 안전 경계

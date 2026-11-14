@@ -9,7 +9,7 @@
 - Logent 변경 내역: [`NOTICE`](NOTICE), [`docs/insane-search.md`](docs/insane-search.md)
 - 플러그인 id: `com.sleepysoong.logent.insane-search`
 - 플러그인 키: `sleepysoong:insane_search` (`logent-plugin.json` 단일 정의)
-- 필수 참조: `sleepysoong:browser_use` · Logent 0.0.84 이상 · API artifact 4.0.0
+- Logent 0.0.84 이상 · API artifact 4.0.0 · 엔진 플러그인에는 필수 참조가 없어요
 
 ## 무엇을 하나요
 
@@ -33,7 +33,7 @@ scripts/                검증·`.lpg`·릴리스
 upstream을 합칠 때 충돌이 줄어요. `plugin/build.gradle.kts`가 실행에 필요한 파일만
 `engine.zip`으로 묶고, `plugin/src/main/assets/`는 빌드 산출물이라 저장소에 넣지 않아요.
 
-공개 의존성은 `sleepysoong:browser_use`이며 manifest의 가용성 판단에만 사용해요.
+`browser_use`는 코어 내장 도구라 플러그인 의존성으로 선언하지 않아요.
 다른 플러그인의 준비 기능이나 데스크톱을 자동으로 시작하지 않아요.
 `ensureReady`는 Termux Python을 유지하면서 필요한 라이브러리만 설치해요.
 Android Python 3.14/ARM64에서는 `curl_cffi>=0.17.0`과 `cffi>=2.1.1`을 사용하고,
