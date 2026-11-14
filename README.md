@@ -26,7 +26,7 @@ HTTP 수집이 끝나도 브라우저 확인이 필요하면 `needs_browser: tru
 skills/insane-search/   원본 엔진·스킬·참조 (upstream 경로 그대로)
 plugin/                 Logent Kotlin 플러그인과 자산 패키징
 tests/python/           Logent가 추가한 안전 회귀 테스트
-scripts/                검증·서명 .lpg·릴리스
+scripts/                검증·`.lpg`·릴리스
 ```
 
 엔진은 `skills/insane-search/engine` 한 곳만 원천으로 써요. 별도 복사본을 두지 않아
@@ -50,13 +50,9 @@ Android SDK 37, JDK 21, Python 3.11 이상이 필요해요. API artifact 4.0.0�
 python3 -m pip install beautifulsoup4
 ./scripts/test.sh --python-only
 ./scripts/test.sh
-LOGENT_CONTENT_SIGNING_KEY_FILE="$HOME/.local/share/logent/content-signing.pem" \
-  ./scripts/build.sh
+./scripts/build.sh
 # build/dist/logent-insane-search-v<VERSION>.lpg
 ```
-
-서명 개인키는 저장소 밖에만 두고, APK에 고정된 ECDSA P-256 공개키와 맞는 패키지만
-설치돼요.
 
 ## upstream 업데이트
 

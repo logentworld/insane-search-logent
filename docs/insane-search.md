@@ -73,7 +73,7 @@ Kotlin은 `needs_browser`를 `WebRescue.needsBrowser`로, `untried_routes`를
 
 ## 통합 후 검증
 
-`./scripts/test.sh`의 Python 17개·JVM 10개 회귀와 Android lint·서명 빌드를
+`./scripts/test.sh`의 Python 17개·JVM 10개 회귀와 Android lint·빌드를
 실행했어요. 실제 Termux Android Python 3.14/ARM64에서 `ensureReady`를 거쳐
 `example.com`의 HTTP 본문을 읽었어요. 이어 코어 `web_fetch` → 실제
 `PageRescueService` → Termux 엔진 경로로 공개 HTTP 403을 조회했어요.
